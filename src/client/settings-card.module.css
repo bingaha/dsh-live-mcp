@@ -40,6 +40,25 @@
   white-space: nowrap;
 }
 
+.nameLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* enabled/disabled indicator: a colored dot with a hover tooltip */
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  cursor: help;
+}
+.dotOn { background: #2fb45a; }
+.dotOff { background: #e5534b; }
+
 .description {
   color: rgba(128, 128, 128, 1);
   font-size: 12px;
@@ -122,7 +141,11 @@
 .main { flex: 1 1 auto; min-width: 0; }
 .desc { color: rgba(128, 128, 128, 1); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(128, 128, 128, 0.15); white-space: nowrap; }
-.status { font-size: 11px; color: rgba(128, 128, 128, 1); }
+.status { font-size: 11px; color: rgba(128, 128, 128, 0.9); }
+.statusRunning { color: #2fb45a; }
+.statusConnecting { color: #4a90d9; }
+.statusStopped { color: rgba(128, 128, 128, 0.9); }
+.statusFailed { color: #e5534b; }
 
 .switch { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
 .switch input { cursor: pointer; }
@@ -130,19 +153,53 @@
 .btn {
   font: inherit;
   font-size: 12px;
-  padding: 4px 10px;
-  border: 1px solid rgba(128, 128, 128, 0.35);
-  border-radius: 6px;
-  background: transparent;
+  font-weight: 500;
+  padding: 5px 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.14);
   color: inherit;
   cursor: pointer;
   white-space: nowrap;
+  line-height: 1.4;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.05s ease;
 }
-.btn:hover { background: rgba(128, 128, 128, 0.1); }
+.btn:hover { background: rgba(128, 128, 128, 0.24); }
+.btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.5; cursor: default; }
-.btnActive { background: rgba(128, 128, 128, 0.15); }
-.btnPrimary { border-color: currentColor; font-weight: 600; }
-.btnDanger { color: #e5534b; border-color: rgba(229, 83, 75, 0.4); }
+.btnActive { background: rgba(128, 128, 128, 0.28); }
+.btnPrimary { border-color: currentColor; background: transparent; font-weight: 600; }
+.btnPrimary:hover { background: rgba(128, 128, 128, 0.12); }
+.btnDanger {
+  background: #d64545;
+  color: #fff;
+}
+.btnDanger:hover { background: #b83535; }
+.btnDanger:disabled { background: #d64545; }
+
+/* compact icon-only button (e.g. the retry arrow) */
+.iconBtn {
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease;
+}
+.iconBtn:hover { background: rgba(128, 128, 128, 0.18); }
+.iconBtn:disabled { opacity: 0.5; cursor: default; }
+.spin { animation: dshIconSpin 1s linear infinite; }
+@keyframes dshIconSpin { to { transform: rotate(360deg); } }
 
 .detail {
   margin: 4px 0 0 0;

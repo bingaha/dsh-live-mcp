@@ -81,7 +81,7 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
   const [list, setList] = useState<{ loading: boolean; items: SkillSummary[]; error: string }>({ loading: true, items: [], error: '' })
   const [detailName, setDetailName] = useState<string | null>(null)
   const [detail, setDetail] = useState<{ path: string; data: any } | null>(null)
-  const [scan, setScan] = useState<{ dir: string; busy: boolean; items: ScannedSkill[]; selected: Record<string, boolean>; error: string; note: string }>({ dir: '', busy: false, items: [], selected: {}, error: '', note: '' })
+  const [scan, setScan] = useState<{ dir: string; busy: boolean; items: ScannedSkill[]; selected: Record<string, boolean>; mode: 'copy' | 'link'; error: string; note: string }>({ dir: '', busy: false, items: [], selected: {}, mode: 'copy', error: '', note: '' })
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
@@ -162,9 +162,15 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
     const chosen = scan.items.filter((it) => scan.selected[it.sourcePath])
     if (chosen.length === 0) { setScan((prev) => ({ ...prev, error: '请先勾选要导入的技能' })); return }
     setScan((prev) => ({ ...prev, busy: true, error: '' }))
-    api.importSkills(chosen.map((it) => ({ sourcePath: it.sourcePath, kind: it.kind }))).then((results) => {
+    api.importSkills(chosen.map((it) => ({ sourcePath: it.sourcePath, kind: it.kind, mode: scan.mode }))).then((results) => {
       const imported = results.filter((x) => x.ok).length
-      setScan((prev) => ({ ...prev, busy: false, selected: {}, note: '已导入 ' + imported + ' 个技能' }))
+      const skipped = results.filter((x) => !x.ok)
+      let note = '导入完成：' + imported + ' 个成功，' + skipped.length + ' 个跳过'
+      if (skipped.length > 0) {
+        const why = skipped.map((x) => (x.reason === 'already exists' ? '已存在' : (x.reason || '失败'))).join('、')
+        note += '（' + why + '）'
+      }
+      setScan((prev) => ({ ...prev, busy: false, selected: {}, note }))
       load()
     }).catch((e) => {
       setScan((prev) => ({ ...prev, busy: false, error: String((e as Error)?.message || e) }))
@@ -191,7 +197,11 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
       rows.push(
         <div key={skill.path} className={css.row}>
           <div className={css.main} style={{ cursor: 'pointer' }} onClick={() => { view(skill) }}>
-            <div className={css.name}>{skill.name}{skill.enabled ? '' : ' （已禁用）'}</div>
+            <div className={css.nameLine}>
+              <span className={css.statusDot + ' ' + (skill.enabled ? css.dotOn : css.dotOff)} title={skill.enabled ? '已启用' : '已禁用'} />
+              <span className={css.name}>{skill.name}</span>
+              {skill.linked ? <span className={css.badge}>软链</span> : null}
+            </div>
             {skill.description ? <div className={css.desc}>{skill.description}</div> : null}
           </div>
           <span className={css.badge}>{sourceLabel(skill.source)}</span>
@@ -200,7 +210,7 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
             <span>{skill.enabled ? '启用' : '禁用'}</span>
           </label>
           <button type="button" className={css.btn} onClick={() => { view(skill) }}>{detailName === skill.path ? '收起' : '详情'}</button>
-          <button type="button" className={css.btnDanger} disabled={isBusy} onClick={() => { remove(skill) }}>{confirmDel === skill.path ? '确认删除?' : '删除'}</button>
+          <button type="button" className={css.btn + ' ' + css.btnDanger} disabled={isBusy} onClick={() => { remove(skill) }}>{confirmDel === skill.path ? '确认删除?' : '删除'}</button>
         </div>,
       )
       if (detailName === skill.path) {
@@ -233,6 +243,17 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
           <button type="button" className={css.btn} disabled={scan.busy} onClick={doScan}>{scan.busy ? '扫描中…' : '扫描目录'}</button>
         </div>
         {scan.error ? <div className={css.error}>{scan.error}</div> : null}
+        <div className={css.inline}>
+          <span className={css.desc}>导入方式：</span>
+          <label className={css.switch}>
+            <input type="radio" name="import-mode" checked={scan.mode === 'link'} onChange={() => { setScan((prev) => ({ ...prev, mode: 'link' })) }} />
+            <span>软链接（不复制，删除只删链接）</span>
+          </label>
+          <label className={css.switch}>
+            <input type="radio" name="import-mode" checked={scan.mode === 'copy'} onChange={() => { setScan((prev) => ({ ...prev, mode: 'copy' })) }} />
+            <span>拷贝导入（实体副本）</span>
+          </label>
+        </div>
         {scan.items.length > 0
           ? <div className={css.scanList}>
               {scan.items.map((it) => (
@@ -289,7 +310,39 @@ function McpPanel(props: { refreshKey: number; onChanged: () => void }) {
     })
   }
 
+  // Quiet refresh: no loading flash, keeps current state on failure. Used by
+  // live polling and after async actions so status transitions surface. Also
+  // stops a retry spinner once the retried server reaches a terminal state.
+  const refresh = () => {
+    api.listMcp().then((servers) => {
+      setList((prev) => ({ ...prev, loading: false, servers, error: '' }))
+      setBusy((b) => {
+        if (typeof b !== 'string' || !b.startsWith('retry:')) return b
+        const nm = b.slice('retry:'.length)
+        const sv = servers.find((x) => x.name === nm)
+        if (sv && (sv.status === 'running' || sv.status === 'failed')) return ''
+        return b
+      })
+    }).catch(() => { /* keep showing last state */ })
+  }
+
+  const retry = (s: McpServerSummary) => {
+    setMsg('')
+    setBusy('retry:' + s.name)
+    api.retryMcp(s.name).then(() => {
+      refresh()
+      setTimeout(refresh, 1500)
+      setTimeout(refresh, 4000)
+    }).catch((e) => { setBusy(''); setMsg(String((e as Error)?.message || e)) })
+  }
+
   useEffect(() => { load() }, [props.refreshKey])
+
+  // Live status polling: surfaces async connecting→running/failed transitions.
+  useEffect(() => {
+    const t = setInterval(refresh, 4000)
+    return () => clearInterval(t)
+  }, [])
 
   const patch = (p: Partial<McpForm>) => { setForm((prev) => ({ ...prev, ...p })) }
 
@@ -358,6 +411,14 @@ function McpPanel(props: { refreshKey: number; onChanged: () => void }) {
     connecting: '连接中', running: '运行中', failed: '失败', stopped: '已停止',
   }
 
+  const statusClass = (st: string): string => {
+    if (st === 'running') return css.statusRunning
+    if (st === 'stopped') return css.statusStopped
+    if (st === 'failed') return css.statusFailed
+    if (st === 'connecting') return css.statusConnecting
+    return ''
+  }
+
   const mq = query.trim().toLowerCase()
   const filteredServers = list.servers.filter((s) => mq === '' || s.name.toLowerCase().includes(mq))
 
@@ -377,7 +438,11 @@ function McpPanel(props: { refreshKey: number; onChanged: () => void }) {
             : filteredServers.map((s) => (
                 <div key={s.name} className={css.row}>
                   <div className={css.main}>
-                    <div className={css.name}>{s.name}{s.enabled ? '' : ' （已禁用）'} <span className={css.status}>{statusLabel[s.status] || s.status}</span></div>
+                    <div className={css.nameLine}>
+                      <span className={css.statusDot + ' ' + (s.enabled ? css.dotOn : css.dotOff)} title={s.enabled ? '已启用' : '已禁用'} />
+                      <span className={css.name}>{s.name}</span>
+                      <span className={css.status + ' ' + statusClass(s.status)}>{statusLabel[s.status] || s.status}</span>
+                    </div>
                     <div className={css.desc}>{s.transport}{s.transport === 'stdio' ? ' · ' + (s.command || '') : ' · ' + (s.url || '')}</div>
                     {s.error ? <div className={css.error}>{s.error}</div> : null}
                   </div>
@@ -385,16 +450,17 @@ function McpPanel(props: { refreshKey: number; onChanged: () => void }) {
                     <input type="checkbox" checked={s.enabled} onChange={() => { toggle(s) }} />
                     <span>{s.enabled ? '启用' : '禁用'}</span>
                   </label>
+                  <button type="button" className={css.iconBtn + (busy === ('retry:' + s.name) ? ' ' + css.spin : '')} disabled={busy === ('retry:' + s.name)} title="重试" aria-label="重试" onClick={() => { retry(s) }}>↻</button>
                   <button type="button" className={css.btn} onClick={() => { edit(s) }}>编辑</button>
-                  <button type="button" className={css.btnDanger} onClick={() => { remove(s) }}>{confirmDel === s.name ? '确认删除?' : '删除'}</button>
+                  <button type="button" className={css.btn + ' ' + css.btnDanger} onClick={() => { remove(s) }}>{confirmDel === s.name ? '确认删除?' : '删除'}</button>
                 </div>
               )))}
       </div>
       <div className={css.section}>
         <div className={css.h}>新建 / 编辑服务器</div>
         <div className={css.inline}>
-          <button type="button" className={form.mode === 'form' ? css.btnActive : css.btn} onClick={() => { patch({ mode: 'form' }) }}>表单</button>
-          <button type="button" className={form.mode === 'json' ? css.btnActive : css.btn} onClick={() => { patch({ mode: 'json' }) }}>JSON</button>
+          <button type="button" className={form.mode === 'form' ? css.btn + ' ' + css.btnActive : css.btn} onClick={() => { patch({ mode: 'form' }) }}>表单</button>
+          <button type="button" className={form.mode === 'json' ? css.btn + ' ' + css.btnActive : css.btn} onClick={() => { patch({ mode: 'json' }) }}>JSON</button>
         </div>
         {form.mode === 'form'
           ? <div className={css.form}>

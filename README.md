@@ -13,9 +13,10 @@ MCP 是**真实连接**：启用的服务器会通过 @deepseek-ai/dsh-mcp-clien
 
 - 区分项目级 / 用户级，按来源分组（.dsh/skills、.agents/skills、~/.dsh/skills、~/.agents/skills）。
 - 启用 / 禁用：改写 SKILL.md 前言的 disable-model-invocation + user-invocable，可逆。
-- 删除：两步确认，物理删除技能目录（bundle）或平铺 .md 文件。
+  - 语义与 DSH 官方一致（`@deepseek-ai/dsh-skill-filesystem`）：`disable-model-invocation: true` 才表示禁用（模型不可调用）；`false` 或缺省 = 不禁用 = 生效。列表显示「生效」即模型可调用。
+- 删除：两步确认，物理删除技能目录（bundle）或平铺 .md 文件；符号链接技能只删除链接、不动源文件。
+- 导入：指定目录 → 扫描技能 → 选择「软链接 / 拷贝导入」到 ~/.dsh/skills。支持系统原生目录选择器与手写路径两种方式。
 - 详情：查看 description、whenToUse 与完整正文。
-- 导入：指定目录 → 扫描技能 → 勾选导入到 ~/.dsh/skills。支持系统原生目录选择器与手写路径两种方式。
 - 搜索 / 过滤：按名称模糊搜索，按「已启用 / 未启用」过滤。
 
 ### MCP 服务

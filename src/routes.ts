@@ -142,11 +142,12 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
       }),
 
       handle('POST', SKILLS_MCP_API.skillImport, async (_req, res, body, _url) => {
-        const items = Array.isArray(body?.items) ? body.items as Array<{ sourcePath?: unknown; kind?: unknown }> : []
+        const items = Array.isArray(body?.items) ? body.items as Array<{ sourcePath?: unknown; kind?: unknown; mode?: unknown }> : []
         if (items.length === 0) { writeJson(res, 400, { ok: false, error: 'nothing selected' }); return }
         const results = skills.importSkills(items.map((it) => ({
           sourcePath: typeof it.sourcePath === 'string' ? it.sourcePath : '',
           kind: it.kind === 'bundle' ? 'bundle' : 'file',
+          mode: it.mode === 'link' ? 'link' : 'copy',
         })))
         writeJson(res, 200, ok({ results }))
       }),
@@ -191,6 +192,17 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
         data.servers = data.servers.filter((x) => x.name !== name)
         writeMcpConfig(data)
         await mcp.sync(data.servers)
+        writeJson(res, 200, ok({ name }))
+      }),
+
+      handle('POST', SKILLS_MCP_API.mcpRetry, async (_req, res, body, _url) => {
+        const name = typeof body?.name === 'string' ? body.name : ''
+        if (!name) { writeJson(res, 400, { ok: false, error: 'name required' }); return }
+        const data = readMcpConfig()
+        const s = data.servers.find((x) => x.name === name)
+        if (s === undefined) { writeJson(res, 404, { ok: false, error: 'server not found: ' + name }); return }
+        if (s.enabled === false) { writeJson(res, 200, ok({ name, skipped: 'disabled' })); return }
+        await mcp.retry(name)
         writeJson(res, 200, ok({ name }))
       }),
 

@@ -7,7 +7,7 @@
  * @module
  */
 
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import type { ImportItem, ImportResult, ScannedSkill, SkillDetail, SkillLevel, SkillSource, SkillSummary } from './protocol.ts'
@@ -111,12 +111,15 @@ function parseSkillFile(raw: string): ParsedSkill | null {
   if (name === '' || description === '') return null
   const whenToUse = typeof fm.data.whenToUse === 'string' ? fm.data.whenToUse : ''
   const disableModel = parseBool(fm.data['disable-model-invocation'])
-  const userInvocable = parseBool(fm.data['user-invocable'])
+  // Mirrors @deepseek-ai/dsh-skill-filesystem's parseInvocationPolicy:
+  // modelInvocable = disable-model-invocation !== true. "Enabled" here means
+  // the skill's MODEL invocation is NOT disabled — a false or absent
+  // disable-model-invocation is enabled.
   return {
     name,
     description,
     whenToUse,
-    enabled: (disableModel !== true) || (userInvocable !== false),
+    enabled: disableModel !== true,
     content: fm.body.trim(),
   }
 }
@@ -145,21 +148,27 @@ export class SkillsManager {
     for (const entry of entries) {
       const name = entry.name
       if (!name || name === '.system' || name[0] === '.') continue
-      if (entry.isDirectory()) {
-        const mdPath = join(dir, name, 'SKILL.md')
+      const full = join(dir, name)
+      // statSync follows symlinks (Dirent.isDirectory/isFile do not), so skills
+      // exposed through a symlink into a user root are listed too.
+      let st
+      try { st = statSync(full) } catch { continue }
+      let linked = false
+      try { linked = lstatSync(full).isSymbolicLink() } catch { /* ignore */ }
+      if (st.isDirectory()) {
+        const mdPath = join(full, 'SKILL.md')
         if (!existsSync(mdPath)) continue
         let raw: string
         try { raw = readFileSync(mdPath, 'utf8') } catch { continue }
         const parsed = parseSkillFile(raw)
         if (parsed === null) continue
-        items.push({ ...parsed, source, level: levelOf(source), kind: 'bundle', path: mdPath })
-      } else if (entry.isFile() && name.endsWith('.md')) {
-        const filePath = join(dir, name)
+        items.push({ ...parsed, source, level: levelOf(source), kind: 'bundle', linked, path: mdPath })
+      } else if (st.isFile() && name.endsWith('.md')) {
         let raw: string
-        try { raw = readFileSync(filePath, 'utf8') } catch { continue }
+        try { raw = readFileSync(full, 'utf8') } catch { continue }
         const parsed = parseSkillFile(raw)
         if (parsed === null) continue
-        items.push({ ...parsed, source, level: levelOf(source), kind: 'file', path: filePath })
+        items.push({ ...parsed, source, level: levelOf(source), kind: 'file', linked, path: full })
       }
     }
     return items
@@ -218,6 +227,10 @@ export class SkillsManager {
   /** Delete a skill (the whole bundle directory, or the flat .md file). */
   deleteSkill(path: string, kind: 'bundle' | 'file'): string {
     const target = kind === 'bundle' ? dirname(path) : path
+    // A symlinked skill removes only the link (never the target's contents).
+    let linked = false
+    try { linked = lstatSync(target).isSymbolicLink() } catch { /* ignore */ }
+    if (linked) { unlinkSync(target); return target }
     rmSync(target, { recursive: true, force: true })
     return target
   }
@@ -230,18 +243,21 @@ export class SkillsManager {
     for (const entry of entries) {
       const name = entry.name
       if (!name || name[0] === '.') continue
-      if (entry.isDirectory()) {
-        const mdPath = join(dir, name, 'SKILL.md')
+      const full = join(dir, name)
+      let st
+      try { st = statSync(full) } catch { continue }
+      if (st.isDirectory()) {
+        const mdPath = join(full, 'SKILL.md')
         if (!existsSync(mdPath)) continue
         let raw: string
         try { raw = readFileSync(mdPath, 'utf8') } catch { continue }
         const parsed = parseSkillFile(raw)
-        if (parsed !== null) items.push({ name: parsed.name, description: parsed.description, sourcePath: join(dir, name), kind: 'bundle' })
-      } else if (entry.isFile() && name.endsWith('.md') && name !== 'SKILL.md') {
+        if (parsed !== null) items.push({ name: parsed.name, description: parsed.description, sourcePath: full, kind: 'bundle' })
+      } else if (st.isFile() && name.endsWith('.md') && name !== 'SKILL.md') {
         let raw: string
-        try { raw = readFileSync(join(dir, name), 'utf8') } catch { continue }
+        try { raw = readFileSync(full, 'utf8') } catch { continue }
         const parsed = parseSkillFile(raw)
-        if (parsed !== null) items.push({ name: parsed.name, description: parsed.description, sourcePath: join(dir, name), kind: 'file' })
+        if (parsed !== null) items.push({ name: parsed.name, description: parsed.description, sourcePath: full, kind: 'file' })
       }
     }
     return items
@@ -259,7 +275,8 @@ export class SkillsManager {
         continue
       }
       try {
-        if (it.kind === 'bundle') cpSync(it.sourcePath, base, { recursive: true })
+        if (it.mode === 'link') symlinkSync(it.sourcePath, base)
+        else if (it.kind === 'bundle') cpSync(it.sourcePath, base, { recursive: true })
         else copyFileSync(it.sourcePath, base)
         results.push({ name: base, ok: true })
       } catch (e) {

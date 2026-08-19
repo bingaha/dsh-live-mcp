@@ -88,6 +88,10 @@ export class SkillsMcpApi {
     await post<{ ok: boolean }>(SKILLS_MCP_API.mcpEnabled, { name, enabled })
   }
 
+  async retryMcp(name: string): Promise<void> {
+    await post<{ ok: boolean }>(SKILLS_MCP_API.mcpRetry, { name })
+  }
+
   async deleteMcp(name: string): Promise<void> {
     await post<{ ok: boolean }>(SKILLS_MCP_API.mcpDelete, { name })
   }

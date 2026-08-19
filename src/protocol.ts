@@ -20,6 +20,8 @@ export interface SkillSummary {
   source: SkillSource
   level: SkillLevel
   kind: 'bundle' | 'file'
+  /** True when the skill lives behind a symlink — deleting removes only the link. */
+  linked?: boolean
   /** Absolute filesystem path of the SKILL.md (bundle) or the .md file. */
   path: string
 }
@@ -42,10 +44,15 @@ export interface ScannedSkill {
   kind: 'bundle' | 'file'
 }
 
+/** Import strategy for one selected skill. */
+export type ImportMode = 'copy' | 'link'
+
 /** One item selected for import. */
 export interface ImportItem {
   sourcePath: string
   kind: 'bundle' | 'file'
+  /** 'link' creates a symlink into ~/.dsh/skills; 'copy' duplicates the files. */
+  mode: ImportMode
 }
 
 /** Result of importing one skill. */
@@ -90,6 +97,7 @@ export const SKILLS_MCP_API = {
   skillImport: '/api/dsh-skills-mcp/skills/import',
   mcp: '/api/dsh-skills-mcp/mcp',
   mcpSave: '/api/dsh-skills-mcp/mcp/save',
+  mcpRetry: '/api/dsh-skills-mcp/mcp/retry',
   mcpEnabled: '/api/dsh-skills-mcp/mcp/enabled',
   mcpDelete: '/api/dsh-skills-mcp/mcp/delete',
   mcpTest: '/api/dsh-skills-mcp/mcp/test',

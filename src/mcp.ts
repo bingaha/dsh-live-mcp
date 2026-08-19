@@ -199,6 +199,42 @@ export class McpManager {
     }
   }
 
+  /**
+   * Force-reconnect a single server (retry after a failure). Disposes any
+   * existing fiber for the name, then starts a fresh live fiber for just this
+   * server. Deliberately does NOT call sync(): sync treats its argument as the
+   * complete server set and would tear down every other live connection.
+   * A no-op for a missing or disabled server.
+   * @param name - the server name to reconnect.
+   */
+  async retry(name: string): Promise<void> {
+    const server = readMcpConfig().servers.find((s) => s.name === name)
+    if (server === undefined || server.enabled === false) return
+    const entry = this.live.get(name)
+    if (entry !== undefined) {
+      this.live.delete(name)
+      this.statuses.delete(name)
+      try { await entry.fiber.dispose() } catch { /* already gone */ }
+    }
+    const normalized = normalizeMcpServer(server)
+    this.statuses.set(name, { status: 'connecting' })
+    let fiber: Fiber & PromiseLike<Fiber>
+    try {
+      fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(normalized)) as Fiber & PromiseLike<Fiber>
+    } catch (e) {
+      this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+      return
+    }
+    this.live.set(name, { config: normalized, fiber })
+    fiber.then(
+      () => { this.statuses.set(name, { status: 'running' }) },
+      (e) => {
+        this.live.delete(name)
+        this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+      },
+    )
+  }
+
   /** Build the UI summary list (persisted config + live status). */
   summarize(servers: McpServerConfig[]): McpServerSummary[] {
     return servers.map((s) => {

@@ -26,13 +26,14 @@ let css = ''
 try { css = readFileSync(cssPath, 'utf8') } catch { /* no css */ }
 
 const cssInject = css
-  ? 'var __css = ' + JSON.stringify(css) + ';\n' +
-    'var __cssTagId = ' + JSON.stringify(pkgName + '/style.css') + ';\n' +
-    'if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(__cssTagId) + "]") === null) {\n' +
+  ? 'var __cssId = ' + JSON.stringify(pkgName + '/style.css') + ';\n' +
+    'if (typeof document !== "undefined") {\n' +
+    '  var __old = document.querySelector("style[data-plugin-css=" + JSON.stringify(__cssId) + "]");\n' +
+    '  if (__old) __old.remove();\n' +
     '  var __cssTag = document.createElement("style");\n' +
     '  __cssTag.dataset.plugin = ' + JSON.stringify(pkgName) + ';\n' +
-    '  __cssTag.dataset.pluginCss = __cssTagId;\n' +
-    '  __cssTag.textContent = __css;\n' +
+    '  __cssTag.dataset.pluginCss = __cssId;\n' +
+    '  __cssTag.textContent = ' + JSON.stringify(css) + ';\n' +
     '  document.head.appendChild(__cssTag);\n' +
     '}\n'
   : ''
