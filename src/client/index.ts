@@ -22,8 +22,11 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the official settings.section slot declaration.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: pulls the conversation SlotMap (conversation.input.dock, etc.).
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { en, zh, type SkillsMcpKey } from './locales.ts'
 import { SkillsMcpSection } from './SettingsCard.tsx'
+import { ConversationDock } from './ConversationDock.tsx'
 
 /** Locale namespace this plugin owns. */
 const NS = 'skills-mcp-manager'
@@ -53,4 +56,13 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({ pickDirectory: () => ctx.workspaces.pickDirectory() }),
   }, SkillsMcpSection))
+
+  // Conversation status bar: the full-width row above the composer card. The
+  // dock slot passes the session snapshot + input state; the component reads
+  // its `blank` flag to decide whether its selection is still editable.
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock',
+    id: 'skills-mcp-dock',
+    order: 50,
+  }, ConversationDock))
 }

@@ -101,4 +101,15 @@ export const SKILLS_MCP_API = {
   mcpEnabled: '/api/dsh-skills-mcp/mcp/enabled',
   mcpDelete: '/api/dsh-skills-mcp/mcp/delete',
   mcpTest: '/api/dsh-skills-mcp/mcp/test',
+  conversation: '/api/dsh-skills-mcp/conversation',
 } as const
+
+/** One conversation's capability selection (stored in the session's own dir). */
+export interface ConversationSelection {
+  /** True = isolated: only `skills`/`mcp` enter this conversation's context. */
+  isolated?: boolean
+  /** Selected skill names (only ever globally-enabled ones). */
+  skills?: string[]
+  /** Selected MCP server names (only ever globally-enabled ones). */
+  mcp?: string[]
+}

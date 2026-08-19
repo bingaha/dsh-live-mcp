@@ -4,7 +4,13 @@
  */
 
 import { SKILLS_MCP_API } from '../protocol.ts'
-import type { ImportItem, ImportResult, McpServerConfig, McpServerSummary, ScannedSkill, SkillDetail, SkillSummary } from '../protocol.ts'
+import type { ConversationSelection, ImportItem, ImportResult, McpServerConfig, McpServerSummary, ScannedSkill, SkillDetail, SkillSummary } from '../protocol.ts'
+
+/** The conversation-capability view the host resolves for one session. */
+export interface ConversationView {
+  selection: ConversationSelection
+  available: { skills: string[]; mcp: string[] }
+}
 
 /** Error carrying the route's JSON error message. */
 export class SkillsMcpApiError extends Error {
@@ -99,5 +105,20 @@ export class SkillsMcpApi {
   async testMcp(server: McpServerConfig): Promise<{ ok: boolean; error?: string }> {
     const body = await post<{ ok: boolean; test: { ok: boolean; error?: string } }>(SKILLS_MCP_API.mcpTest, { server })
     return body.test
+  }
+
+  async getConversation(session: string): Promise<ConversationView> {
+    const body = await get<{ ok: boolean; selection: ConversationSelection; available: { skills: string[]; mcp: string[] } }>(
+      SKILLS_MCP_API.conversation + '?session=' + encodeURIComponent(session),
+    )
+    return { selection: body.selection, available: body.available }
+  }
+
+  async setConversation(session: string, selection: ConversationSelection): Promise<ConversationView> {
+    const body = await post<{ ok: boolean; selection: ConversationSelection; available: { skills: string[]; mcp: string[] } }>(
+      SKILLS_MCP_API.conversation,
+      { session, ...selection },
+    )
+    return { selection: body.selection, available: body.available }
   }
 }

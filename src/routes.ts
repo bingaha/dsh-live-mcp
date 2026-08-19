@@ -11,8 +11,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { McpManager, normalizeMcpServer, readMcpConfig, validateMcpServer, writeMcpConfig } from './mcp.ts'
 import { SkillsManager } from './skills.ts'
+import { readSelection, writeSelection } from './session-select.ts'
 import { SKILLS_MCP_API } from './protocol.ts'
-import type { McpServerConfig } from './protocol.ts'
+import type { ConversationSelection, McpServerConfig } from './protocol.ts'
 
 /** Cap on JSON request bodies (server definitions and import lists are small). */
 const MAX_JSON_BODY_BYTES = 1024 * 1024
@@ -61,6 +62,8 @@ function queryParam(url: URL, name: string): string | undefined {
 export interface RoutesDeps {
   skills: SkillsManager
   mcp: McpManager
+  /** Resolve a session's project cwd by session id (for session-local storage). */
+  resolveCwd: (sessionId: string) => string | undefined
 }
 
 /**
@@ -69,7 +72,7 @@ export interface RoutesDeps {
  * @returns the route registrations.
  */
 export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
-  const { skills, mcp } = deps
+  const { skills, mcp, resolveCwd } = deps
 
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
@@ -213,6 +216,69 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
         const result = await mcp.testConnect(server as McpServerConfig)
         writeJson(res, 200, ok({ test: result }))
       }),
+
+      // ── per-conversation ─────────────────────────────────────────────────
+      // GET = resolve this session's selection + available set; POST = save a
+      // selection. One WebRoute (exact paths are keyed by path alone, with no
+      // method axis), so a single handler dispatches on the method.
+      {
+        kind: 'exact',
+        path: SKILLS_MCP_API.conversation,
+        handler: async (req, res) => {
+          if (!isLoopbackRequest(req)) { writeJson(res, 403, { ok: false, error: 'forbidden: loopback-only' }); return }
+          try {
+            if (req.method === 'GET') {
+              const url = new URL(req.url ?? '/', 'http://localhost')
+              const session = queryParam(url, 'session') ?? ''
+              if (!session) { writeJson(res, 400, { ok: false, error: 'session required' }); return }
+              const cwd = resolveCwd(session) ?? queryParam(url, 'cwd') ?? ''
+              writeJson(res, 200, ok(resolveConversation(skills, readSelection(session, cwd), cwd)))
+              return
+            }
+            if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method not allowed' }); return }
+            const body = await readJsonBody(req)
+            if (body === undefined) { writeJson(res, 400, { ok: false, error: 'invalid or oversized JSON body' }); return }
+            const session = typeof body?.session === 'string' ? body.session : ''
+            if (!session) { writeJson(res, 400, { ok: false, error: 'session required' }); return }
+            const cwd = resolveCwd(session) ?? (typeof body?.cwd === 'string' ? body.cwd : '')
+            const request: ConversationSelection = {
+              isolated: typeof body?.isolated === 'boolean' ? body.isolated : undefined,
+              skills: Array.isArray(body?.skills) ? (body.skills as string[]).filter((x) => typeof x === 'string') : undefined,
+              mcp: Array.isArray(body?.mcp) ? (body.mcp as string[]).filter((x) => typeof x === 'string') : undefined,
+            }
+            writeSelection(session, cwd, request)
+            writeJson(res, 200, ok(resolveConversation(skills, request, cwd)))
+          } catch (e) {
+            writeJson(res, 500, { ok: false, error: String((e as Error)?.message ?? e) })
+          }
+        },
+      },
     ],
+  }
+}
+
+/**
+ * Resolve the conversation's selectable capabilities. `available` is always
+ * the FULL set of globally-enabled candidates (the selectable pool) — the
+ * client lists every one and highlights what is active. Isolation affects
+ * only `selection` and which capabilities enter the conversation's context
+ * (enforced at agent assembly), never the selectable pool.
+ */
+function resolveConversation(
+  skills: SkillsManager,
+  selection: ConversationSelection,
+  cwd: string,
+): { selection: ConversationSelection; available: { skills: string[]; mcp: string[] } } {
+  const enabledSkills = skills
+    .listSkills(cwd)
+    .filter((s) => s.enabled)
+    .map((s) => s.name)
+  const enabledMcp = readMcpConfig()
+    .servers
+    .filter((s) => s.enabled !== false)
+    .map((s) => s.name)
+  return {
+    selection,
+    available: { skills: enabledSkills, mcp: enabledMcp },
   }
 }

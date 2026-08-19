@@ -1,6 +1,7 @@
 /**
  * Skills filesystem engine — scans the four manageable skill roots, parses
- * SKILL.md frontmatter, and performs enable/disable (frontmatter rewrite),
+ * SKILL.md frontmatter, and performs enable/disable (via the plugin's own
+ * switch set — never by rewriting SKILL.md's disable-model-invocation),
  * delete, scan-for-import, and import. Runs in the Host process with direct
  * node:fs access (a real npm package no longer needs the shell+node hack the
  * dynamic plugin used).
@@ -10,6 +11,7 @@
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { effectiveSkillEnabled, readState, writeState } from './state.ts'
 import type { ImportItem, ImportResult, ScannedSkill, SkillDetail, SkillLevel, SkillSource, SkillSummary } from './protocol.ts'
 
 /** User-level skill roots (project roots are derived from the workspace cwd). */
@@ -124,20 +126,6 @@ function parseSkillFile(raw: string): ParsedSkill | null {
   }
 }
 
-/** Rewrite the frontmatter to add/remove the disable-model-invocation pair. */
-function toggleInvocation(raw: string, enabled: boolean): string {
-  const lines = raw.split(/\r?\n/)
-  if (lines.length === 0 || lines[0].trim() !== '---') return raw
-  let closeIdx = -1
-  for (let i = 1; i < lines.length; i++) { if (lines[i].trim() === '---') { closeIdx = i; break } }
-  if (closeIdx < 0) return raw
-  const kept = lines.slice(1, closeIdx).filter((l) => {
-    return !/^\s*(disable-model-invocation|disableModelInvocation|modelInvocable|user-invocable|userInvocable)\s*:/.test(l)
-  })
-  if (!enabled) { kept.push('disable-model-invocation: true'); kept.push('user-invocable: false') }
-  return [lines[0]].concat(kept, lines.slice(closeIdx)).join('\n')
-}
-
 export class SkillsManager {
   /** Scan one skill root directory into SkillSummary records. */
   scanRoot(dir: string, source: SkillSource): SkillSummary[] {
@@ -205,6 +193,9 @@ export class SkillsManager {
       if (a.level !== b.level) return a.level === 'project' ? -1 : 1
       return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
     })
+    // Apply the plugin's own global switch set (never the SKILL.md attribute).
+    const switches = readState().skills
+    for (const it of items) it.enabled = effectiveSkillEnabled(switches, it.path, it.enabled)
     return items
   }
 
@@ -214,14 +205,18 @@ export class SkillsManager {
     const raw = readFileSync(path, 'utf8')
     const parsed = parseSkillFile(raw)
     if (parsed === null) return null
-    return { ...parsed, path }
+    return { ...parsed, path, enabled: effectiveSkillEnabled(readState().skills, path, parsed.enabled) }
   }
 
-  /** Enable/disable a skill by rewriting its frontmatter invocation flags. */
+  /**
+   * Enable/disable a skill by recording it in the plugin-owned switch set.
+   * The SKILL.md file is never rewritten (the disable-model-invocation
+   * attribute is no longer modified).
+   */
   setSkillEnabled(path: string, enabled: boolean): void {
-    const raw = readFileSync(path, 'utf8')
-    const next = toggleInvocation(raw, enabled)
-    writeFileSync(path, next, 'utf8')
+    const state = readState()
+    state.skills = { ...state.skills, [path]: enabled }
+    writeState(state)
   }
 
   /** Delete a skill (the whole bundle directory, or the flat .md file). */
