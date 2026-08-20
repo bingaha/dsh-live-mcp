@@ -12,4 +12,4 @@
 # stable); `name` is the published package name and must match package.json.
 - insert:
     - id: ui-skills-mcp-manager
-      name: '@zebbkira/dsh-skills-mcp-manager'
+      name: '@bingaha/dsh-skills-mcp-manager'

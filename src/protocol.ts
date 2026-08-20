@@ -104,12 +104,26 @@ export const SKILLS_MCP_API = {
   conversation: '/api/dsh-skills-mcp/conversation',
 } as const
 
-/** One conversation's capability selection (stored in the session's own dir). */
+/** One conversation's capability selection (stored in the session's own dir).
+ *
+ * **Blacklist (deny-list) semantics** — the DEFAULT is "everything globally
+ * enabled is available" (an empty selection is a no-op, no config at all). A
+ * conversation only diverges by listing what to KEEP OUT: those MCP servers'
+ * tools are not injected into this conversation; those skills are marked
+ * unavailable (skills aren't tool-hidden, so this is UI-only parity).
+ */
 export interface ConversationSelection {
-  /** True = isolated: only `skills`/`mcp` enter this conversation's context. */
-  isolated?: boolean
-  /** Selected skill names (only ever globally-enabled ones). */
-  skills?: string[]
-  /** Selected MCP server names (only ever globally-enabled ones). */
+  /** Blacklisted MCP server names — their tools are NOT injected into this
+   * conversation. Empty/absent = inject every globally-enabled MCP server. */
   mcp?: string[]
+  /** Blacklisted skill names — marked unavailable here (UI parity; skill
+   * tool-level hiding is not implemented). Empty/absent = all enabled skills. */
+  skills?: string[]
+}
+
+/** One enabled MCP server as a selectable candidate in the status bar. */
+export interface ConversationMcpOption {
+  name: string
+  /** Live connection status — a `failed` server is shown red (enabled but not working). */
+  status: McpConnectionStatus
 }

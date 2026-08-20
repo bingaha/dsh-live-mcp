@@ -45,6 +45,24 @@ export function writeMcpConfig(data: { servers: McpServerConfig[] }): void {
   writeFileSync(target, JSON.stringify(data, null, 2), 'utf8')
 }
 
+/**
+ * Flatten an error's message INCLUDING its `cause` chain. mcp-client wraps the
+ * real startup failure in `new Error('mcp-client(X): ...', { cause })`, so
+ * showing only `.message` hides the diagnosable truth. Walks up to 8 causes.
+ */
+export function describeError(e: unknown): string {
+  const parts: string[] = []
+  let current: unknown = e
+  for (let depth = 0; current !== undefined && current !== null && depth < 8; depth++) {
+    const msg = typeof current === 'object' && current !== null && typeof (current as Error).message === 'string'
+      ? (current as Error).message
+      : String(current)
+    if (msg && !parts.includes(msg)) parts.push(msg)
+    current = typeof current === 'object' && current !== null ? (current as { cause?: unknown }).cause : undefined
+  }
+  return parts.join(' → ')
+}
+
 /** Validate one server definition; returns an error string, or null when valid. */
 export function validateMcpServer(server: unknown): string | null {
   if (!server || typeof server !== 'object') return 'server must be an object'
@@ -126,6 +144,16 @@ export class McpManager {
 
   constructor(private readonly ctx: Context) {}
 
+  /**
+   * MCP client instances must be children of the active application root.
+   * This manager is constructed while its owning plugin is still activating;
+   * mounting a client on that pending local context makes Cordis reject its
+   * required `tools` service as inactive.
+   */
+  private startClient(config: mcpClient.Config): Fiber & PromiseLike<Fiber> {
+    return this.ctx.root.plugin(mcpClient, config) as Fiber & PromiseLike<Fiber>
+  }
+
   private enqueue(task: () => Promise<void>): Promise<void> {
     const run = this.operation.then(task, task)
     this.operation = run.catch(() => undefined)
@@ -168,9 +196,9 @@ export class McpManager {
         this.statuses.set(name, { status: 'connecting' })
         let fiber: Fiber & PromiseLike<Fiber>
         try {
-          fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(cfg))
+          fiber = this.startClient(toMcpClientConfig(cfg))
         } catch (e) {
-          this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+          this.statuses.set(name, { status: 'failed', error: describeError(e) })
           continue
         }
         const entry: LiveServer = { config: normalizeMcpServer(cfg), fiber }
@@ -184,7 +212,7 @@ export class McpManager {
             // disposed; it must not delete or overwrite the current entry.
             if (this.live.get(name) !== entry) return
             this.live.delete(name)
-            this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+            this.statuses.set(name, { status: 'failed', error: describeError(e) })
           },
         )
       }
@@ -214,12 +242,12 @@ export class McpManager {
   async testConnect(server: McpServerConfig): Promise<{ ok: boolean; error?: string }> {
     const normalized = normalizeMcpServer(server)
     if (this.live.has(normalized.name)) return { ok: true }
-    const fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(normalized)) as Fiber & PromiseLike<Fiber>
+    const fiber = this.startClient(toMcpClientConfig(normalized))
     try {
       await fiber
       return { ok: true }
     } catch (e) {
-      return { ok: false, error: String((e as Error)?.message ?? e) }
+      return { ok: false, error: describeError(e) }
     } finally {
       try { await fiber.dispose() } catch { /* already gone */ }
     }
@@ -248,9 +276,9 @@ export class McpManager {
       this.statuses.set(name, { status: 'connecting' })
       let fiber: Fiber & PromiseLike<Fiber>
       try {
-        fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(normalized)) as Fiber & PromiseLike<Fiber>
+        fiber = this.startClient(toMcpClientConfig(normalized))
       } catch (e) {
-        this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+        this.statuses.set(name, { status: 'failed', error: describeError(e) })
         return
       }
       const next: LiveServer = { config: normalized, fiber }
@@ -262,7 +290,7 @@ export class McpManager {
         (e) => {
           if (this.live.get(name) !== next) return
           this.live.delete(name)
-          this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+          this.statuses.set(name, { status: 'failed', error: describeError(e) })
         },
       )
     })

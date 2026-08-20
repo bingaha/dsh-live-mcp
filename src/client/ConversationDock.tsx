@@ -3,20 +3,26 @@
  * full-width row above the composer card. Shows the current conversation's
  * capability selection (MCP servers + skills) and lets the user manage it.
  *
- * Editing is ALWAYS available: enabling/disabling an MCP or skill at any point
- * in a conversation takes effect from the next model request (the host applies
- * it live to the running agent). Toggling a specific capability implicitly
- * isolates the conversation (subtractive set); turning isolation off restores
- * every globally-enabled capability.
+ * **Blacklist (deny-list) semantics** — the default is "everything globally
+ * enabled is available" (an empty selection is a no-op). A conversation only
+ * lists what to KEEP OUT: blacklisting a server excludes its tools from this
+ * conversation; removing the block restores everything. An empty selection =
+ * no config at all.
  *
- * Every globally-enabled capability is always listed as a chip; a chip is
- * lit (green) when it is active in THIS conversation, gray otherwise. In an
- * isolated conversation only the active chips enter context; clicking a chip
- * toggles its membership. Only globally-enabled capabilities are ever shown.
+ * Editing is ALWAYS available (anytime at any point in a conversation; the
+ * host applies it live from the next model request).
+ *
+ * Every globally-enabled capability is listed as a chip:
+ * - green = available in THIS conversation (not blacklisted / running)
+ * - gray  = blacklisted here (kept out)
+ * - red   = enabled but FAILED to connect (never injecting — even though you
+ *   didn't blacklist it). Blacklist is per-SERVER, so a red server can still
+ *   be toggled into/out of the blacklist by name.
+ * Only globally-enabled capabilities are ever shown.
  */
 
 import { useEffect, useState, type CSSProperties } from 'react'
-import type { ConversationSelection } from '../protocol.ts'
+import type { ConversationMcpOption, ConversationSelection } from '../protocol.ts'
 import { SkillsMcpApi, type ConversationView } from './api.ts'
 
 interface DockProps {
@@ -53,11 +59,13 @@ const chipOn: CSSProperties = {
 const chipOff: CSSProperties = {
   padding: '1px 8px', borderRadius: 999, background: 'rgba(128,128,128,0.15)', color: 'rgba(128,128,128,0.9)', cursor: 'pointer', whiteSpace: 'nowrap',
 }
-const toggleBase: CSSProperties = {
-  font: 'inherit', fontSize: 12, padding: '2px 10px', borderRadius: 999, border: '1px solid transparent', cursor: 'pointer', whiteSpace: 'nowrap',
+const chipRed: CSSProperties = {
+  padding: '1px 8px', borderRadius: 999, background: 'rgba(229,83,75,0.16)', color: '#e5534b', cursor: 'pointer', whiteSpace: 'nowrap',
 }
-const toggleOn: CSSProperties = { ...toggleBase, background: 'rgba(47,180,90,0.25)', color: '#2fb45a' }
-const toggleOff: CSSProperties = { ...toggleBase, background: 'rgba(128,128,128,0.15)', color: 'rgba(128,128,128,0.9)' }
+const chipAmber: CSSProperties = {
+  padding: '1px 8px', borderRadius: 999, background: 'rgba(210,153,34,0.16)', color: '#d29922', cursor: 'pointer', whiteSpace: 'nowrap',
+}
+const hintStyle: CSSProperties = { opacity: 0.7 }
 
 export function ConversationDock(props: DockProps) {
   const { session } = props
@@ -74,89 +82,102 @@ export function ConversationDock(props: DockProps) {
   }
 
   const { selection, available } = view
-  const isolated = selection.isolated === true
-  // What actually enters context: non-isolated → every enabled candidate;
-  // isolated → only the selected (intersected with what is still enabled).
-  const activeMcp: string[] = isolated ? (selection.mcp ?? []).filter((n) => available.mcp.includes(n)) : available.mcp
-  const activeSkills: string[] = isolated ? (selection.skills ?? []).filter((n) => available.skills.includes(n)) : available.skills
-  const activeMcpSet = new Set(activeMcp)
-  const activeSkillsSet = new Set(activeSkills)
+  const blockedMcp = new Set(selection.mcp ?? [])
+  const blockedSkills = new Set(selection.skills ?? [])
 
+  // Blacklist model: a server is ACTIVE in this conversation unless blacklisted.
   const save = (next: ConversationSelection) => {
     api.setConversation(session.sessionId, next).then((v) => setView(v)).catch((e) => setError(String(e instanceof Error ? e.message : e)))
   }
 
-  const toggleIsolated = () => {
-    if (isolated) {
-      // Turning isolation OFF means "use everything enabled".
-      save({ isolated: false, skills: available.skills, mcp: available.mcp })
-    } else {
-      // Turning isolation ON with no selection yet → start from "everything
-      // selected", so the user removes what they don't want.
-      save({ isolated: true, skills: available.skills, mcp: available.mcp })
-    }
-  }
-
   const toggleOne = (cur: ConversationSelection, kind: CapKind, name: string) => {
-    const all = kind === 'mcp' ? available.mcp : available.skills
-    if (!all.includes(name)) return // only globally-enabled capabilities are selectable
+    // The selectable pool is every globally-ENABLED capability. A failed
+    // (red) server is still enabled, so it can be blacklisted by name — even
+    // though its tools aren't currently registered, blacklisting it keeps it
+    // out should it come back up later.
+    const all = kind === 'mcp'
+      ? available.mcp.map((o) => o.name)
+      : available.skills
+    if (!all.includes(name)) return
     const set = new Set(cur[kind] ?? [])
     if (set.has(name)) set.delete(name); else set.add(name)
     save({ ...cur, [kind]: [...set] })
   }
 
-  const clickChip = (kind: CapKind, name: string) => {
-    if (!isolated) {
-      // Picking a specific capability implicitly isolates the conversation:
-      // enable isolation starting from "all selected", then toggle this one.
-      toggleOne({ isolated: true, skills: available.skills, mcp: available.mcp }, kind, name)
+  const mcpChip = (opt: ConversationMcpOption) => {
+    const blocked = blockedMcp.has(opt.name)
+    // Render priority: blacklist (your choice) OVERRIDES the raw connection
+    // display — blacklisted → gray regardless of status. Red is ONLY the real
+    // load status (failed) shown when you have NOT blacklisted it. Config
+    // (`enabled`) decides which servers appear at all, never their color.
+    let style: CSSProperties
+    let title: string
+    if (blocked) {
+      style = chipOff
+      title = opt.status === 'failed'
+        ? '已加入黑名单（连接失败）：点击恢复可用'
+        : '已加入黑名单，本会话不注入：点击恢复可用'
+    } else if (opt.status === 'failed') {
+      style = chipRed
+      title = '已启用但连接失败，未注入工具：点击加入黑名单'
+    } else if (opt.status === 'connecting') {
+      style = chipAmber
+      title = '连接中，当前可用：点击加入黑名单'
     } else {
-      toggleOne(selection, kind, name)
+      style = chipOn
+      title = '可用：点击加入黑名单'
     }
-  }
-
-  const chip = (name: string, kind: CapKind, on: boolean) => {
-    const style = on ? chipOn : chipOff
     return (
       <span
-        key={kind + ':' + name}
+        key={'mcp:' + opt.name}
         style={style}
-        title={on ? '在上下文中，点击移除' : '不在上下文中，点击加入'}
-        onClick={() => clickChip(kind, name)}
+        title={title}
+        onClick={() => toggleOne(selection, 'mcp', opt.name)}
+      >{opt.name}</span>
+    )
+  }
+
+  const skillChip = (name: string) => {
+    const blocked = blockedSkills.has(name)
+    const style = blocked ? chipOff : chipOn
+    const title = blocked ? '已加入黑名单，点击恢复' : '可用，点击加入黑名单'
+    return (
+      <span
+        key={'skills:' + name}
+        style={style}
+        title={title}
+        onClick={() => toggleOne(selection, 'skills', name)}
       >{name}</span>
     )
   }
 
   const missing = [...(selection.mcp ?? []), ...(selection.skills ?? [])]
-    .filter((n) => !available.mcp.includes(n) && !available.skills.includes(n))
+    .filter((n) => !available.mcp.some((o) => o.name === n) && !available.skills.includes(n))
+
+  const blockedCount = blockedMcp.size + blockedSkills.size
 
   return (
     <div style={rowStyle}>
-      <button
-        type="button"
-        style={isolated ? toggleOn : toggleOff}
-        onClick={toggleIsolated}
-        title={isolated ? '本会话仅使用所选能力' : '本会话使用全部全局启用能力'}
-      >
-        {isolated ? '已隔离' : '未隔离'}
-      </button>
+      <span style={labelStyle}>
+        {blockedCount === 0 ? '全部可用' : '黑名单'}
+      </span>
 
       <div style={groupStyle}>
         <span style={labelStyle}>MCP</span>
         {available.mcp.length === 0
-          ? <span style={{ opacity: 0.6 }}>无</span>
-          : available.mcp.map((n) => chip(n, 'mcp', activeMcpSet.has(n)))}
+          ? <span style={hintStyle}>无</span>
+          : available.mcp.map((o) => mcpChip(o))}
       </div>
 
       <div style={groupStyle}>
         <span style={labelStyle}>技能</span>
         {available.skills.length === 0
-          ? <span style={{ opacity: 0.6 }}>无</span>
-          : available.skills.map((n) => chip(n, 'skills', activeSkillsSet.has(n)))}
+          ? <span style={hintStyle}>无</span>
+          : available.skills.map((n) => skillChip(n))}
       </div>
 
       {missing.length > 0 && (
-        <span style={{ opacity: 0.7 }} title="这些已不在全局启用中">移出：{missing.join('、')}</span>
+        <span style={hintStyle} title="这些已不在全局启用中">移出：{missing.join('、')}</span>
       )}
       {error ? <span style={{ color: '#e5534b' }}>{error}</span> : null}
     </div>

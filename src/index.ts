@@ -73,8 +73,8 @@ export function apply(ctx: Context, config?: Config): void {
   // Per-conversation MCP isolation engine. Runtime state is WeakMap-keyed by
   // the live Agent and its effects are scoped to agent.ctx, so it unwinds
   // automatically with the agent — there is no sessionId table to clean when a
-  // conversation is archived or deleted. The durable selection lives in the
-  // session's own directory (session-select.ts) and dies with it.
+  // conversation is archived or deleted. The durable blacklist lives in the
+  // official session directory (session-select.ts) and dies with it.
   const isolation = new ConversationIsolation(ctx)
   const { routes } = makeRoutes({
     skills,
@@ -88,6 +88,15 @@ export function apply(ctx: Context, config?: Config): void {
 
   let disposeSection: (() => void) | undefined
   let disposeRoutes: (() => void) | undefined
+  let reloadTimer: NodeJS.Immediate | undefined
+
+  const scheduleMcpReload = (): void => {
+    if (reloadTimer !== undefined) clearImmediate(reloadTimer)
+    reloadTimer = setImmediate(() => {
+      reloadTimer = undefined
+      void mcp.reload()
+    })
+  }
 
   // Register (or drop) every surface to match the current source.
   const sync = (): void => {
@@ -118,8 +127,10 @@ export function apply(ctx: Context, config?: Config): void {
       },
       'skills-mcp-manager: routes',
     )
-    // Connect enabled servers from the persisted document.
-    void mcp.reload()
+    // Connect only after this plugin's activation turn completes. Dynamic
+    // child plugins mounted while this fiber is still pending see injected
+    // services as inactive in Cordis.
+    scheduleMcpReload()
   }
 
   installSettingsSection(ctx, SKILLS_MCP_NAMESPACE, Config, config ?? {}, {
@@ -132,7 +143,13 @@ export function apply(ctx: Context, config?: Config): void {
 
   // Teardown must be returned so Cordis waits for MCP transports to release
   // their tool namespaces before an injected replacement starts.
-  ctx.effect(() => () => mcp.dispose(), 'skills-mcp-manager: mcp')
+  ctx.effect(() => () => {
+    if (reloadTimer !== undefined) {
+      clearImmediate(reloadTimer)
+      reloadTimer = undefined
+    }
+    return mcp.dispose()
+  }, 'skills-mcp-manager: mcp')
 
   // Per-conversation MCP isolation: apply the conversation's persisted
   // selection on agent creation. The engine is reactive to asynchronous MCP
@@ -146,7 +163,9 @@ export function apply(ctx: Context, config?: Config): void {
       const cwd = agent.session?.header.cwd
       if (!cwd) return
       const selection = readSelection(agent.id, cwd)
-      if (selection.isolated !== true) return
+      // Blacklist model: only a non-empty block list needs enforcement; an
+      // empty selection is "all globally-enabled available" (no isolator).
+      if ((selection.mcp ?? []).length === 0) return
       isolation.apply(agent, selection)
     } catch (e) {
       ctx.logger?.warn?.('[skills-mcp-manager] agent/created isolation: ' + String((e as Error)?.message ?? e))

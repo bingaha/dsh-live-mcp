@@ -13,7 +13,7 @@ import { McpManager, normalizeMcpServer, readMcpConfig, validateMcpServer, write
 import { SkillsManager } from './skills.ts'
 import { readSelection, writeSelection } from './session-select.ts'
 import { SKILLS_MCP_API } from './protocol.ts'
-import type { ConversationSelection, McpServerConfig } from './protocol.ts'
+import type { ConversationMcpOption, ConversationSelection, McpServerConfig } from './protocol.ts'
 
 /** Cap on JSON request bodies (server definitions and import lists are small). */
 const MAX_JSON_BODY_BYTES = 1024 * 1024
@@ -239,7 +239,7 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
               const session = queryParam(url, 'session') ?? ''
               if (!session) { writeJson(res, 400, { ok: false, error: 'session required' }); return }
               const cwd = resolveCwd(session) ?? queryParam(url, 'cwd') ?? ''
-              writeJson(res, 200, ok(resolveConversation(skills, readSelection(session, cwd), cwd)))
+              writeJson(res, 200, ok(resolveConversation(skills, mcp, readSelection(session, cwd), cwd)))
               return
             }
             if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method not allowed' }); return }
@@ -249,7 +249,6 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
             if (!session) { writeJson(res, 400, { ok: false, error: 'session required' }); return }
             const cwd = resolveCwd(session) ?? (typeof body?.cwd === 'string' ? body.cwd : '')
             const request: ConversationSelection = {
-              isolated: typeof body?.isolated === 'boolean' ? body.isolated : undefined,
               skills: Array.isArray(body?.skills) ? (body.skills as string[]).filter((x) => typeof x === 'string') : undefined,
               mcp: Array.isArray(body?.mcp) ? (body.mcp as string[]).filter((x) => typeof x === 'string') : undefined,
             }
@@ -257,7 +256,7 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
             // If the conversation is live, apply immediately so a status-bar
             // toggle takes effect right away (between model requests).
             applyLive(session, request)
-            writeJson(res, 200, ok(resolveConversation(skills, request, cwd)))
+            writeJson(res, 200, ok(resolveConversation(skills, mcp, request, cwd)))
           } catch (e) {
             writeJson(res, 500, { ok: false, error: String((e as Error)?.message ?? e) })
           }
@@ -270,23 +269,25 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
 /**
  * Resolve the conversation's selectable capabilities. `available` is always
  * the FULL set of globally-enabled candidates (the selectable pool) — the
- * client lists every one and highlights what is active. Isolation affects
- * only `selection` and which capabilities enter the conversation's context
- * (enforced at agent assembly), never the selectable pool.
+ * client lists every one and highlights what is active. MCP options carry
+ * their LIVE connection status so a failed-but-enabled server renders red.
+ * The conversation's `selection` (blacklist) decides which of those are denied
+ * in this conversation (enforced at agent assembly), never the selectable pool.
  */
 function resolveConversation(
   skills: SkillsManager,
+  mcp: McpManager,
   selection: ConversationSelection,
   cwd: string,
-): { selection: ConversationSelection; available: { skills: string[]; mcp: string[] } } {
+): { selection: ConversationSelection; available: { skills: string[]; mcp: ConversationMcpOption[] } } {
   const enabledSkills = skills
     .listSkills(cwd)
     .filter((s) => s.enabled)
     .map((s) => s.name)
-  const enabledMcp = readMcpConfig()
-    .servers
-    .filter((s) => s.enabled !== false)
-    .map((s) => s.name)
+  const enabledMcp = mcp
+    .summarize(readMcpConfig().servers)
+    .filter((s) => s.enabled)
+    .map((s) => ({ name: s.name, status: s.status }))
   return {
     selection,
     available: { skills: enabledSkills, mcp: enabledMcp },

@@ -12,7 +12,7 @@
  *   the live `Agent` object and every Cordis effect (restrict, guard,
  *   tools/change listener) is registered on `agent.ctx`, so disposing the
  *   agent unwinds it all automatically. No sync-cleanup, no orphan handles.
- *   The DURABLE source of truth is the per-session selection file (see
+ *   The DURABLE source of truth is the per-session blacklist file (see
  *   session-select.ts); this class only *applies* that file to a live agent.
  *
  * - **Anytime toggling.** `apply(agent, selection)` swaps the current deny set
@@ -28,14 +28,15 @@
  *   change event retry — never throw out of the host.
  *
  * - **Guard safety net.** A live `guard` (reads the *current* selection, not a
- *   snapshot) denies dispatch for a non-selected isolated server that somehow
+ *   snapshot) denies dispatch for a blacklisted server's tool that somehow
  *   slipped through before the next schema refresh.
  *
- * Isolation semantics = subtractive, not a frozen N-set: default (non-isolated)
- * inherits every enabled candidate; isolation denies only unselected `mcp__`
- * tools on this agent's own scope. Skills are kept in the selection model for
- * the UI, but tool-level hiding is not implemented (they surface through one
- * shared `skill` tool), so the deny set targets only MCP tools.
+ * Blacklist (deny-list) semantics: the default (empty selection) injects every
+ * globally-enabled candidate; a conversation lists only what to KEEP OUT, and
+ * those `mcp__` tools are denied on this agent's own scope (per server). Skills
+ * are kept in the selection model for the UI, but tool-level hiding is not
+ * implemented (they surface through one shared `skill` tool), so the deny set
+ * targets only MCP tools.
  * @module
  */
 
@@ -55,6 +56,13 @@ interface Isolator {
   changeDispose: (() => void) | null
   /** The deny list last applied, for idempotent re-sync (avoids restrict loops). */
   lastDeny: readonly string[]
+  /**
+   * True while this isolator is inside {@link ConversationIsolation.sync}.
+   * `restrict()` / its disposer both emit `tools/change` synchronously; without
+   * this latch the listener re-enters sync, applies a second restrict, and
+   * overwrites `denyDispose` so the first layer is leaked forever.
+   */
+  syncing: boolean
 }
 
 /** Matches a model-facing MCP tool name, capturing the server namespace. */
@@ -109,15 +117,15 @@ export class ConversationIsolation {
       guardDispose: null,
       changeDispose: null,
       lastDeny: [],
+      syncing: false,
     }
-    // Safety net: deny dispatch for a non-selected server in an isolated
-    // conversation. Reads the CURRENT selection so a mid-conversation toggle
-    // is reflected without re-registering the guard.
+    // Safety net: deny dispatch for a blacklisted server's tool. Reads the
+    // CURRENT selection so a mid-conversation toggle is reflected without
+    // re-registering the guard.
     iso.guardDispose = agent.ctx.tools.guard((execution) => {
-      if (iso.selection.isolated !== true) return undefined
       const match = MCP_TOOL.exec(execution.name)
-      if (match !== null && !(iso.selection.mcp ?? []).includes(match[1])) {
-        return `MCP server "${match[1]}" is not enabled for this conversation`
+      if (match !== null && (iso.selection.mcp ?? []).includes(match[1])) {
+        return `MCP server "${match[1]}" is blacklisted for this conversation`
       }
       return undefined
     })
@@ -129,42 +137,46 @@ export class ConversationIsolation {
 
   /** Recompute and swap the agent's deny restriction to match its selection. */
   private sync(agent: LiveAgent, iso: Isolator): void {
-    // Non-isolated conversations inherit everything: clear any restriction.
-    if (iso.selection.isolated !== true) {
-      this.disposeRestrict(iso)
-      iso.lastDeny = []
-      return
-    }
-    const selected = new Set(iso.selection.mcp ?? [])
-    // Read the HOST global schema surface (not the agent's restricted view) so
-    // the deny set is computed against the full candidate universe and is
-    // stable even after our own earlier restriction hid tools from the agent.
-    const deny: string[] = []
-    for (const tool of this.ctx.tools.schemas()) {
-      const match = MCP_TOOL.exec(tool.name)
-      if (match !== null && !selected.has(match[1])) deny.push(tool.name)
-    }
-    deny.sort()
-    if (isSame(deny, iso.lastDeny)) return
-    this.disposeRestrict(iso)
-    if (deny.length === 0) {
-      iso.lastDeny = []
-      return
-    }
+    // `restrict()` and its disposer both emit `tools/change` synchronously.
+    // Ignore those self-inflicted events: the deny set is computed from the
+    // host global catalog, which a scope-local restrict does not change.
+    if (iso.syncing) return
+    iso.syncing = true
     try {
-      // An unknown name rejects the whole call; if MCP is still connecting the
-      // names simply aren't known yet and the next tools/change re-syncs.
-      iso.denyDispose = agent.ctx.tools.restrict({ deny })
-      iso.lastDeny = deny
-    } catch {
-      iso.lastDeny = []
+      // Blacklist model: deny every tool of the blacklisted servers; an empty
+      // blacklist injects everything (no-op, the default).
+      const blocked = new Set(iso.selection.mcp ?? [])
+      // Read the HOST global schema surface (not the agent's restricted view) so
+      // the deny set is computed against the full candidate universe and is
+      // stable even after our own earlier restriction hid tools from the agent.
+      const deny: string[] = []
+      for (const tool of this.ctx.tools.schemas()) {
+        const match = MCP_TOOL.exec(tool.name)
+        if (match !== null && blocked.has(match[1])) deny.push(tool.name)
+      }
+      deny.sort()
+      if (isSame(deny, iso.lastDeny)) return
+      this.disposeRestrict(iso)
+      if (deny.length === 0) {
+        iso.lastDeny = []
+        return
+      }
+      try {
+        // An unknown name rejects the whole call; if MCP is still connecting the
+        // names simply aren't known yet and the next tools/change re-syncs.
+        iso.denyDispose = agent.ctx.tools.restrict({ deny })
+        iso.lastDeny = deny
+      } catch {
+        iso.lastDeny = []
+      }
+    } finally {
+      iso.syncing = false
     }
   }
 
   private disposeRestrict(iso: Isolator): void {
-    if (iso.denyDispose !== null) {
-      iso.denyDispose()
-      iso.denyDispose = null
-    }
+    const dispose = iso.denyDispose
+    iso.denyDispose = null
+    if (dispose !== null) dispose()
   }
 }
