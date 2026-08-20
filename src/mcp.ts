@@ -119,8 +119,18 @@ interface LiveServer {
 export class McpManager {
   private readonly live = new Map<string, LiveServer>()
   private readonly statuses = new Map<string, { status: McpConnectionStatus; error?: string }>()
+  // All mutations are serialized so an initial fire-and-forget reload cannot
+  // race a route-triggered sync or plugin teardown.
+  private operation: Promise<void> = Promise.resolve()
+  private disposed = false
 
   constructor(private readonly ctx: Context) {}
+
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const run = this.operation.then(task, task)
+    this.operation = run.catch(() => undefined)
+    return run
+  }
 
   /** Re-read the persisted document and converge the live fiber set onto it. */
   async reload(): Promise<void> {
@@ -133,50 +143,66 @@ export class McpManager {
    * @param servers - the complete next server list (enabled flag respected).
    */
   async sync(servers: McpServerConfig[]): Promise<void> {
-    const next = new Map<string, McpServerConfig>()
-    for (const s of servers) {
-      if (s.enabled !== false) next.set(s.name, s)
-    }
-    // Tear down anything removed, disabled, or changed.
-    for (const [name, entry] of [...this.live]) {
-      const target = next.get(name)
-      if (target === undefined || configChanged(entry.config, target)) {
-        this.live.delete(name)
-        this.statuses.delete(name)
-        try { await entry.fiber.dispose() } catch { /* already gone */ }
+    await this.enqueue(async () => {
+      if (this.disposed) return
+      const next = new Map<string, McpServerConfig>()
+      for (const s of servers) {
+        if (s.enabled !== false) next.set(s.name, s)
       }
-    }
-    // Bring up newly-enabled servers (or ones whose config just changed).
-    for (const [name, cfg] of next) {
-      if (this.live.has(name)) continue
-      this.statuses.set(name, { status: 'connecting' })
-      let fiber: Fiber & PromiseLike<Fiber>
-      try {
-        fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(cfg))
-      } catch (e) {
-        this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
-        continue
-      }
-      this.live.set(name, { config: normalizeMcpServer(cfg), fiber })
-      fiber.then(
-        () => { this.statuses.set(name, { status: 'running' }) },
-        (e) => {
-          // failOnStartupError surfaced the initial connect failure; the fiber
-          // already rolled itself back, so drop it and remember the reason.
+      // Tear down anything removed, disabled, or changed.
+      const closing: Promise<unknown>[] = []
+      for (const [name, entry] of [...this.live]) {
+        const target = next.get(name)
+        if (target === undefined || configChanged(entry.config, target)) {
           this.live.delete(name)
+          this.statuses.delete(name)
+          closing.push(Promise.resolve(entry.fiber.dispose()).catch(() => undefined))
+        }
+      }
+      // Close all obsolete transports together; never hold up one server
+      // behind another server's stdio shutdown grace period.
+      await Promise.all(closing)
+      // Bring up newly-enabled servers (or ones whose config just changed).
+      for (const [name, cfg] of next) {
+        if (this.disposed || this.live.has(name)) continue
+        this.statuses.set(name, { status: 'connecting' })
+        let fiber: Fiber & PromiseLike<Fiber>
+        try {
+          fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(cfg))
+        } catch (e) {
           this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
-        },
-      )
-    }
+          continue
+        }
+        const entry: LiveServer = { config: normalizeMcpServer(cfg), fiber }
+        this.live.set(name, entry)
+        fiber.then(
+          () => {
+            if (this.live.get(name) === entry) this.statuses.set(name, { status: 'running' })
+          },
+          (e) => {
+            // Ignore a late settlement from an entry already replaced or
+            // disposed; it must not delete or overwrite the current entry.
+            if (this.live.get(name) !== entry) return
+            this.live.delete(name)
+            this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+          },
+        )
+      }
+    })
   }
 
   /** Stop and dispose every live connection (plugin teardown). */
   async dispose(): Promise<void> {
-    for (const [name, entry] of [...this.live]) {
-      this.live.delete(name)
-      this.statuses.delete(name)
-      try { await entry.fiber.dispose() } catch { /* already gone */ }
-    }
+    this.disposed = true
+    await this.enqueue(async () => {
+      const closing: Promise<unknown>[] = []
+      for (const [name, entry] of [...this.live]) {
+        this.live.delete(name)
+        this.statuses.delete(name)
+        closing.push(Promise.resolve(entry.fiber.dispose()).catch(() => undefined))
+      }
+      await Promise.all(closing)
+    })
   }
 
   /**
@@ -208,31 +234,38 @@ export class McpManager {
    * @param name - the server name to reconnect.
    */
   async retry(name: string): Promise<void> {
-    const server = readMcpConfig().servers.find((s) => s.name === name)
-    if (server === undefined || server.enabled === false) return
-    const entry = this.live.get(name)
-    if (entry !== undefined) {
-      this.live.delete(name)
-      this.statuses.delete(name)
-      try { await entry.fiber.dispose() } catch { /* already gone */ }
-    }
-    const normalized = normalizeMcpServer(server)
-    this.statuses.set(name, { status: 'connecting' })
-    let fiber: Fiber & PromiseLike<Fiber>
-    try {
-      fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(normalized)) as Fiber & PromiseLike<Fiber>
-    } catch (e) {
-      this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
-      return
-    }
-    this.live.set(name, { config: normalized, fiber })
-    fiber.then(
-      () => { this.statuses.set(name, { status: 'running' }) },
-      (e) => {
+    await this.enqueue(async () => {
+      if (this.disposed) return
+      const server = readMcpConfig().servers.find((s) => s.name === name)
+      if (server === undefined || server.enabled === false) return
+      const entry = this.live.get(name)
+      if (entry !== undefined) {
         this.live.delete(name)
+        this.statuses.delete(name)
+        try { await entry.fiber.dispose() } catch { /* already gone */ }
+      }
+      const normalized = normalizeMcpServer(server)
+      this.statuses.set(name, { status: 'connecting' })
+      let fiber: Fiber & PromiseLike<Fiber>
+      try {
+        fiber = this.ctx.plugin(mcpClient, toMcpClientConfig(normalized)) as Fiber & PromiseLike<Fiber>
+      } catch (e) {
         this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
-      },
-    )
+        return
+      }
+      const next: LiveServer = { config: normalized, fiber }
+      this.live.set(name, next)
+      fiber.then(
+        () => {
+          if (this.live.get(name) === next) this.statuses.set(name, { status: 'running' })
+        },
+        (e) => {
+          if (this.live.get(name) !== next) return
+          this.live.delete(name)
+          this.statuses.set(name, { status: 'failed', error: String((e as Error)?.message ?? e) })
+        },
+      )
+    })
   }
 
   /** Build the UI summary list (persisted config + live status). */

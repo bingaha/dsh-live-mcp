@@ -3,9 +3,11 @@
  * full-width row above the composer card. Shows the current conversation's
  * capability selection (MCP servers + skills) and lets the user manage it.
  *
- * Editing is gated on the session still being blank (no produced output), the
- * only window in which DSH permits changing a conversation's isolated tool
- * scope. Once a conversation has produced output it renders read-only.
+ * Editing is ALWAYS available: enabling/disabling an MCP or skill at any point
+ * in a conversation takes effect from the next model request (the host applies
+ * it live to the running agent). Toggling a specific capability implicitly
+ * isolates the conversation (subtractive set); turning isolation off restores
+ * every globally-enabled capability.
  *
  * Every globally-enabled capability is always listed as a chip; a chip is
  * lit (green) when it is active in THIS conversation, gray otherwise. In an
@@ -51,7 +53,6 @@ const chipOn: CSSProperties = {
 const chipOff: CSSProperties = {
   padding: '1px 8px', borderRadius: 999, background: 'rgba(128,128,128,0.15)', color: 'rgba(128,128,128,0.9)', cursor: 'pointer', whiteSpace: 'nowrap',
 }
-const chipLocked: CSSProperties = { ...chipOn, cursor: 'default' }
 const toggleBase: CSSProperties = {
   font: 'inherit', fontSize: 12, padding: '2px 10px', borderRadius: 999, border: '1px solid transparent', cursor: 'pointer', whiteSpace: 'nowrap',
 }
@@ -60,7 +61,6 @@ const toggleOff: CSSProperties = { ...toggleBase, background: 'rgba(128,128,128,
 
 export function ConversationDock(props: DockProps) {
   const { session } = props
-  const editable = session.blank === true
   const [view, setView] = useState<ConversationView | null>(null)
   const [error, setError] = useState('')
 
@@ -116,13 +116,13 @@ export function ConversationDock(props: DockProps) {
   }
 
   const chip = (name: string, kind: CapKind, on: boolean) => {
-    const style = !editable ? chipLocked : on ? chipOn : chipOff
+    const style = on ? chipOn : chipOff
     return (
       <span
         key={kind + ':' + name}
         style={style}
-        title={editable ? (on ? '在上下文中，点击移除' : '不在上下文中，点击加入') : '已锁定'}
-        onClick={editable ? () => clickChip(kind, name) : undefined}
+        title={on ? '在上下文中，点击移除' : '不在上下文中，点击加入'}
+        onClick={() => clickChip(kind, name)}
       >{name}</span>
     )
   }
@@ -135,8 +135,8 @@ export function ConversationDock(props: DockProps) {
       <button
         type="button"
         style={isolated ? toggleOn : toggleOff}
-        onClick={editable ? toggleIsolated : undefined}
-        title={editable ? (isolated ? '本会话仅使用所选能力' : '本会话使用全部全局启用能力') : '会话已产出，锁定'}
+        onClick={toggleIsolated}
+        title={isolated ? '本会话仅使用所选能力' : '本会话使用全部全局启用能力'}
       >
         {isolated ? '已隔离' : '未隔离'}
       </button>
@@ -158,7 +158,6 @@ export function ConversationDock(props: DockProps) {
       {missing.length > 0 && (
         <span style={{ opacity: 0.7 }} title="这些已不在全局启用中">移出：{missing.join('、')}</span>
       )}
-      {!editable && <span style={{ opacity: 0.6 }}>（已产出，只读）</span>}
       {error ? <span style={{ color: '#e5534b' }}>{error}</span> : null}
     </div>
   )

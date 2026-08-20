@@ -17,6 +17,7 @@ import { McpManager, readMcpConfig } from './mcp.ts'
 import { makeRoutes } from './routes.ts'
 import { readSelection } from './session-select.ts'
 import { SkillsManager } from './skills.ts'
+import { ConversationIsolation } from './isolation.ts'
 
 /** Stable cordis plugin name. */
 export const name = 'skills-mcp-manager'
@@ -69,10 +70,20 @@ export function apply(ctx: Context, config?: Config): void {
 
   const skills = new SkillsManager()
   const mcp = new McpManager(ctx)
+  // Per-conversation MCP isolation engine. Runtime state is WeakMap-keyed by
+  // the live Agent and its effects are scoped to agent.ctx, so it unwinds
+  // automatically with the agent — there is no sessionId table to clean when a
+  // conversation is archived or deleted. The durable selection lives in the
+  // session's own directory (session-select.ts) and dies with it.
+  const isolation = new ConversationIsolation(ctx)
   const { routes } = makeRoutes({
     skills,
     mcp,
     resolveCwd: (sessionId) => ctx.agents.get(sessionId as never)?.session?.header.cwd,
+    applyLive: (sessionId, selection) => {
+      const agent = ctx.agents.get(sessionId as never)
+      if (agent !== undefined) isolation.apply(agent, selection)
+    },
   })
 
   let disposeSection: (() => void) | undefined
@@ -119,27 +130,24 @@ export function apply(ctx: Context, config?: Config): void {
     onChange: sync,
   })
 
-  // Teardown every MCP connection when the plugin unloads.
-  ctx.effect(() => () => { void mcp.dispose() }, 'skills-mcp-manager: mcp')
+  // Teardown must be returned so Cordis waits for MCP transports to release
+  // their tool namespaces before an injected replacement starts.
+  ctx.effect(() => () => mcp.dispose(), 'skills-mcp-manager: mcp')
 
-  // Per-conversation isolation, applied at agent creation (before any output,
-  // the only window DSH permits for changing a conversation's tool scope):
-  // an isolated session sees only its selected MCP servers' tools — the tools
-  // of every other enabled server are denied on this session's own scope, so
-  // they never enter its context, while other sessions are untouched.
+  // Per-conversation MCP isolation: apply the conversation's persisted
+  // selection on agent creation. The engine is reactive to asynchronous MCP
+  // connection (it only denies *currently-registered* names and re-syncs on
+  // every tools/change, so a late-registering server is never lost and a
+  // still-connecting one never throws). Selection changes made later through
+  // the status bar re-apply live via applyLive; the agent-scoped effects here
+  // unwind automatically when the agent is disposed.
   ctx.on('agent/created', ({ agent }) => {
     try {
       const cwd = agent.session?.header.cwd
       if (!cwd) return
       const selection = readSelection(agent.id, cwd)
       if (selection.isolated !== true) return
-      const selected = new Set(selection.mcp ?? [])
-      const deny: string[] = []
-      for (const tool of ctx.tools.schemas()) {
-        const match = /^mcp__([A-Za-z0-9_-]+)__/.exec(tool.name)
-        if (match && !selected.has(match[1])) deny.push(tool.name)
-      }
-      if (deny.length > 0) agent.ctx.tools.restrict({ deny })
+      isolation.apply(agent, selection)
     } catch (e) {
       ctx.logger?.warn?.('[skills-mcp-manager] agent/created isolation: ' + String((e as Error)?.message ?? e))
     }

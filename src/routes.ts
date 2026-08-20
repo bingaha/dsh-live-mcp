@@ -64,6 +64,13 @@ export interface RoutesDeps {
   mcp: McpManager
   /** Resolve a session's project cwd by session id (for session-local storage). */
   resolveCwd: (sessionId: string) => string | undefined
+  /**
+   * Apply a just-saved selection to the conversation's live agent (if one is
+   * running), so a status-bar change takes effect immediately — not only at
+   * conversation creation. No-op when the agent is not live (the agent/created
+   * hook re-applies later from the persisted file).
+   */
+  applyLive: (sessionId: string, selection: ConversationSelection) => void
 }
 
 /**
@@ -72,7 +79,7 @@ export interface RoutesDeps {
  * @returns the route registrations.
  */
 export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
-  const { skills, mcp, resolveCwd } = deps
+  const { skills, mcp, resolveCwd, applyLive } = deps
 
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
@@ -247,6 +254,9 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
               mcp: Array.isArray(body?.mcp) ? (body.mcp as string[]).filter((x) => typeof x === 'string') : undefined,
             }
             writeSelection(session, cwd, request)
+            // If the conversation is live, apply immediately so a status-bar
+            // toggle takes effect right away (between model requests).
+            applyLive(session, request)
             writeJson(res, 200, ok(resolveConversation(skills, request, cwd)))
           } catch (e) {
             writeJson(res, 500, { ok: false, error: String((e as Error)?.message ?? e) })
