@@ -1,5 +1,5 @@
 /**
- * Client locale dictionaries for the dsh-skills-mcp-manager settings card.
+ * Client locale dictionaries for the dsh-live-mcp settings card.
  * The card chrome is bilingual; the deeper management UI keeps the original
  * Chinese copy inline (see manager.tsx).
  */

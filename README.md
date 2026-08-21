@@ -1,8 +1,8 @@
-# dsh-skills-mcp-manager
+# dsh-live-mcp
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI 的「技能与 MCP」管理器插件：设置页新增「技能与 MCP」页面，每个会话输入框上方有一条能力状态条。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI 的 MCP 实时管理插件：**对话中途启停 / 屏蔽 MCP 服务器，工具集即刻生效**，无需重开会话。附带技能的浏览、导入与删除。入口：设置页「技能与 MCP」+ 每个会话输入框上方的状态条。
 
-MCP 为**真实连接**：启用的服务器真正连上，工具注册为 `mcp__<server>__<tool>`；对话中途启停 / 屏蔽，下一轮模型请求即刻生效。
+MCP 为**真实连接**：启用的服务器真正连上，工具注册为 `mcp__<server>__<tool>`；改动下一轮模型请求即刻生效。
 
 ## 界面展示
 
@@ -63,9 +63,13 @@ Skills：扫描导入（软链接 / 拷贝）、搜索过滤、策略标签、�
 
 前置：Node.js >= 22.19，已安装 dsh 命令行。
 
-    git clone https://github.com/bingaha/dsh-skills-mcp-manager.git
-    cd dsh-skills-mcp-manager
+    git clone https://github.com/bingaha/dsh-live-mcp.git
+    cd dsh-live-mcp
     dsh plugin --profile web add link:$(pwd)
     dsh web
 
 入口：设置页 →「技能与 MCP」管理技能与服务器；任意会话输入框上方的状态条查看与按会话屏蔽 MCP。
+
+## 致谢
+
+本项目 fork 自 [zebbkira/dsh-skills-mcp-manager](https://github.com/zebbkira/dsh-skills-mcp-manager)，感谢上游的原创工作。

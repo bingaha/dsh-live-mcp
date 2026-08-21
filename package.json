@@ -1,8 +1,8 @@
 {
-  "name": "@bingaha/dsh-skills-mcp-manager",
+  "name": "@bingaha/dsh-live-mcp",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bingaha/dsh-skills-mcp-manager.git"
+    "url": "git+https://github.com/bingaha/dsh-live-mcp.git"
   },
   "description": "Skills & MCP manager for the dsh web GUI: browse/enable/import/delete skills across project and user roots, and manage MCP servers with a REAL connection through @deepseek-ai/dsh-mcp-client (enabled servers connect and register their tools on ctx.tools; enable/disable actually connects/disconnects). Hot-pluggable — mounted via a profile bundle patch + node_modules symlink, no dsh source changes.",
   "version": "0.1.3",

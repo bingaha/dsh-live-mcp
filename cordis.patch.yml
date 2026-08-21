@@ -1,4 +1,4 @@
-# dsh-skills-mcp-manager bundle patch: inserts the dual-face plugin row
+# dsh-live-mcp bundle patch: inserts the dual-face plugin row
 # into the web profile roster. Applied as a profile bundle layer (the
 # `dsh.bundle.patch` manifest field) over dsh-base.
 #
@@ -12,4 +12,4 @@
 # stable); `name` is the published package name and must match package.json.
 - insert:
     - id: ui-skills-mcp-manager
-      name: '@bingaha/dsh-skills-mcp-manager'
+      name: '@bingaha/dsh-live-mcp'
