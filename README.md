@@ -4,12 +4,32 @@
 
 MCP 为**真实连接**：启用的服务器会真正连上，其工具注册为 `mcp__<server>__<tool>`。
 
+## 界面展示
+
+### 会话能力状态条
+
+每个会话输入框上方都有一条状态条，「MCP」和「技能」两组 chip 一览当前可用能力；MCP 可点击按会话屏蔽。
+
+![会话能力状态条](docs/images/showcase-status-bar.png)
+
+### 设置页 · Skills 技能
+
+设置页「技能与 MCP → Skills 技能」：扫描导入（软链接 / 拷贝）、按名称搜索与调用策略过滤、状态点与「模型不可用 / 用户不可用」标签、详情展开与删除。
+
+![设置页 Skills 技能](docs/images/showcase-settings-skills.png)
+
+### 设置页 · MCP 服务
+
+设置页「技能与 MCP → MCP 服务」：服务器列表实时显示连接状态，可启用 / 禁用（真实连接 / 断开）、编辑、删除；下方以表单或 JSON 新建服务器（stdio：command / args / env / cwd）。
+
+![设置页 MCP 服务](docs/images/showcase-settings-mcp.png)
+
 ## 功能
 
 ### 技能（Skills）
 
 - 浏览项目级与用户级技能，按来源分组（`.dsh/skills`、`.agents/skills`、`~/.dsh/skills`、`~/.agents/skills`）。
-- **只读展示作者策略**，不提供启用/禁用开关。颜色与标签来自 SKILL.md 的 `disable-model-invocation` / `user-invocable`；插件不改该文件，也不把前者当成「插件禁用」。
+- **只读展示作者策略**。颜色与标签来自 SKILL.md 的 `disable-model-invocation` / `user-invocable`；插件不改该文件，也不把前者当成「插件禁用」。
 - 删除：两步确认；符号链接技能只删链接、不动源文件。
 - 导入：扫描任意目录 → 选择技能 → 以「软链接 / 拷贝」导入到 `~/.dsh/skills`。
 - 详情：点整行或「详情」，预览（description、whenToUse、正文）在**同一条边框**里向下展开。
