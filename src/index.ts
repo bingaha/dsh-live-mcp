@@ -54,7 +54,7 @@ const DEFAULT_ANNOUNCE = true
 const SECTION_ORDER = 160
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
-export const SKILLS_MCP_GUIDANCE = '本机已安装 dsh-skills-mcp-manager 插件（技能与 MCP 管理器）：设置页「Web UI 插件 → 技能与 MCP」。能力：浏览/启用/禁用/删除/导入技能（项目级 .dsh/skills、.agents/skills 与用户级 ~/.dsh/skills、~/.agents/skills）；管理 MCP 服务器（stdio 与 streamable-http）。MCP 是真实连接：启用的服务器经 @deepseek-ai/dsh-mcp-client 真正连接并把工具注册为 mcp__<server>__<tool>，启用/禁用会实际连接/断开。限制：MCP 服务器配置存 ~/.dsh/mcp.json（密码/env 明文、权限 0600 由用户自行保证）；技能启用/禁用走插件自有开关集合（存 ~/.dsh/skills-mcp-manager/state.json），不修改 SKILL.md 文件；删除为物理删除，不可恢复。用户提到「技能管理 / 技能导入 / MCP 服务器 / MCP 连接」时即指本插件，请据此协作。'
+export const SKILLS_MCP_GUIDANCE = '本机已安装 dsh-skills-mcp-manager 插件（技能与 MCP 管理器）：设置页「Web UI 插件 → 技能与 MCP」。能力：浏览/删除/导入技能（项目级 .dsh/skills、.agents/skills 与用户级 ~/.dsh/skills、~/.agents/skills）；管理 MCP 服务器（stdio 与 streamable-http）。MCP 是真实连接：启用的服务器经 @deepseek-ai/dsh-mcp-client 真正连接并把工具注册为 mcp__<server>__<tool>，启用/禁用会实际连接/断开。限制：MCP 服务器配置存 ~/.dsh/mcp.json（密码/env 明文、权限 0600 由用户自行保证）；本轮不提供技能启用/禁用开关，调用策略以 SKILL.md 的 disable-model-invocation / user-invocable 为准，插件不改该文件；~/.dsh/skills-mcp-manager/state.json 里旧的技能开关键忽略、不删；删除为物理删除，不可恢复。用户提到「技能管理 / 技能导入 / MCP 服务器 / MCP 连接」时即指本插件，请据此协作。'
 
 /**
  * Mount the skills engine, MCP manager, routes, and announcement.

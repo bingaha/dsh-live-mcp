@@ -1,17 +1,17 @@
 /**
  * Skills filesystem engine — scans the four manageable skill roots, parses
- * SKILL.md frontmatter, and performs enable/disable (via the plugin's own
- * switch set — never by rewriting SKILL.md's disable-model-invocation),
+ * SKILL.md frontmatter (including read-only invocation policy), and performs
  * delete, scan-for-import, and import. Runs in the Host process with direct
  * node:fs access (a real npm package no longer needs the shell+node hack the
- * dynamic plugin used).
+ * dynamic plugin used). The plugin does not rewrite SKILL.md and does not
+ * overlay `state.json` skill switches onto list/detail results.
  * @module
  */
 
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { effectiveSkillEnabled, readState, writeState } from './state.ts'
+import { readState, writeState } from './state.ts'
 import type { ImportItem, ImportResult, ScannedSkill, SkillDetail, SkillLevel, SkillSource, SkillSummary } from './protocol.ts'
 
 /** User-level skill roots (project roots are derived from the workspace cwd). */
@@ -102,7 +102,15 @@ function parseFrontmatter(raw: string): Frontmatter | null {
   return { data, body }
 }
 
-interface ParsedSkill { name: string; description: string; whenToUse: string; enabled: boolean; content: string }
+interface ParsedSkill {
+  name: string
+  description: string
+  whenToUse: string
+  modelInvocable: boolean
+  userInvocable: boolean
+  enabled: boolean
+  content: string
+}
 
 /** Parse one skill document; null when it lacks a name/description. */
 function parseSkillFile(raw: string): ParsedSkill | null {
@@ -113,15 +121,19 @@ function parseSkillFile(raw: string): ParsedSkill | null {
   if (name === '' || description === '') return null
   const whenToUse = typeof fm.data.whenToUse === 'string' ? fm.data.whenToUse : ''
   const disableModel = parseBool(fm.data['disable-model-invocation'])
+  const userInvocableFlag = parseBool(fm.data['user-invocable'])
   // Mirrors @deepseek-ai/dsh-skill-filesystem's parseInvocationPolicy:
-  // modelInvocable = disable-model-invocation !== true. "Enabled" here means
-  // the skill's MODEL invocation is NOT disabled — a false or absent
-  // disable-model-invocation is enabled.
+  // modelInvocable = disable-model-invocation !== true;
+  // userInvocable = user-invocable !== false. Omitted fields default to true.
+  const modelInvocable = disableModel !== true
+  const userInvocable = userInvocableFlag !== false
   return {
     name,
     description,
     whenToUse,
-    enabled: disableModel !== true,
+    modelInvocable,
+    userInvocable,
+    enabled: modelInvocable,
     content: fm.body.trim(),
   }
 }
@@ -193,9 +205,7 @@ export class SkillsManager {
       if (a.level !== b.level) return a.level === 'project' ? -1 : 1
       return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
     })
-    // Apply the plugin's own global switch set (never the SKILL.md attribute).
-    const switches = readState().skills
-    for (const it of items) it.enabled = effectiveSkillEnabled(switches, it.path, it.enabled)
+    // Author policy only — plugin state.json skill switches are ignored (not deleted).
     return items
   }
 
@@ -205,7 +215,7 @@ export class SkillsManager {
     const raw = readFileSync(path, 'utf8')
     const parsed = parseSkillFile(raw)
     if (parsed === null) return null
-    return { ...parsed, path, enabled: effectiveSkillEnabled(readState().skills, path, parsed.enabled) }
+    return { ...parsed, path }
   }
 
   /**

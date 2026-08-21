@@ -16,7 +16,15 @@ export interface SkillSummary {
   name: string
   description: string
   whenToUse: string
+  /**
+   * Legacy alias of `modelInvocable` (no plugin-switch overlay). Settings UI
+   * (ticket 03) will stop using this; keep it so the current client compiles.
+   */
   enabled: boolean
+  /** Author policy: model may self-discover this skill (`disable-model-invocation` !== true). */
+  modelInvocable: boolean
+  /** Author policy: user may invoke this skill (`user-invocable` !== false). */
+  userInvocable: boolean
   source: SkillSource
   level: SkillLevel
   kind: 'bundle' | 'file'
@@ -31,7 +39,10 @@ export interface SkillDetail {
   name: string
   description: string
   whenToUse: string
+  /** Legacy alias of `modelInvocable` (no plugin-switch overlay). */
   enabled: boolean
+  modelInvocable: boolean
+  userInvocable: boolean
   content: string
   path: string
 }
@@ -109,15 +120,16 @@ export const SKILLS_MCP_API = {
  * **Blacklist (deny-list) semantics** — the DEFAULT is "everything globally
  * enabled is available" (an empty selection is a no-op, no config at all). A
  * conversation only diverges by listing what to KEEP OUT: those MCP servers'
- * tools are not injected into this conversation; those skills are marked
- * unavailable (skills aren't tool-hidden, so this is UI-only parity).
+ * tools are not injected into this conversation. A skill-name blacklist may
+ * still exist on disk from earlier UI; this round's list/GET does not filter
+ * skills by plugin switches or rewrite session-select storage.
  */
 export interface ConversationSelection {
   /** Blacklisted MCP server names — their tools are NOT injected into this
    * conversation. Empty/absent = inject every globally-enabled MCP server. */
   mcp?: string[]
-  /** Blacklisted skill names — marked unavailable here (UI parity; skill
-   * tool-level hiding is not implemented). Empty/absent = all enabled skills. */
+  /** Blacklisted skill names that may still exist on disk. This round's
+   * skill list / conversation GET does not filter by plugin switches. */
   skills?: string[]
 }
 
@@ -126,4 +138,11 @@ export interface ConversationMcpOption {
   name: string
   /** Live connection status — a `failed` server is shown red (enabled but not working). */
   status: McpConnectionStatus
+}
+
+/** One scanned skill as a conversation-capability candidate (not filtered). */
+export interface ConversationSkillOption {
+  name: string
+  modelInvocable: boolean
+  userInvocable: boolean
 }

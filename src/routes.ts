@@ -13,7 +13,7 @@ import { McpManager, normalizeMcpServer, readMcpConfig, validateMcpServer, write
 import { SkillsManager } from './skills.ts'
 import { readSelection, writeSelection } from './session-select.ts'
 import { SKILLS_MCP_API } from './protocol.ts'
-import type { ConversationMcpOption, ConversationSelection, McpServerConfig } from './protocol.ts'
+import type { ConversationMcpOption, ConversationSelection, ConversationSkillOption, McpServerConfig } from './protocol.ts'
 
 /** Cap on JSON request bodies (server definitions and import lists are small). */
 const MAX_JSON_BODY_BYTES = 1024 * 1024
@@ -267,29 +267,27 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
 }
 
 /**
- * Resolve the conversation's selectable capabilities. `available` is always
- * the FULL set of globally-enabled candidates (the selectable pool) — the
- * client lists every one and highlights what is active. MCP options carry
- * their LIVE connection status so a failed-but-enabled server renders red.
- * The conversation's `selection` (blacklist) decides which of those are denied
- * in this conversation (enforced at agent assembly), never the selectable pool.
+ * Resolve the conversation's selectable capabilities. Skills are every
+ * scanned document plus author invocation flags (not filtered by plugin
+ * switches or by model/user policy). MCP options remain globally-enabled
+ * servers with live connection status. The conversation's `selection`
+ * (MCP blacklist) decides which of those servers are denied here.
  */
-function resolveConversation(
+export function resolveConversation(
   skills: SkillsManager,
-  mcp: McpManager,
+  mcp: Pick<McpManager, 'summarize'>,
   selection: ConversationSelection,
   cwd: string,
-): { selection: ConversationSelection; available: { skills: string[]; mcp: ConversationMcpOption[] } } {
-  const enabledSkills = skills
+): { selection: ConversationSelection; available: { skills: ConversationSkillOption[]; mcp: ConversationMcpOption[] } } {
+  const skillOptions = skills
     .listSkills(cwd)
-    .filter((s) => s.enabled)
-    .map((s) => s.name)
+    .map((s) => ({ name: s.name, modelInvocable: s.modelInvocable, userInvocable: s.userInvocable }))
   const enabledMcp = mcp
     .summarize(readMcpConfig().servers)
     .filter((s) => s.enabled)
     .map((s) => ({ name: s.name, status: s.status }))
   return {
     selection,
-    available: { skills: enabledSkills, mcp: enabledMcp },
+    available: { skills: skillOptions, mcp: enabledMcp },
   }
 }

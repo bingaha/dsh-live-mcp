@@ -7,6 +7,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import { SkillsMcpApi } from './api.ts'
+import { notifyCapabilityChange } from './notify.ts'
 import type { McpServerConfig, McpServerSummary, ScannedSkill, SkillSummary } from '../protocol.ts'
 import css from './settings-card.module.css'
 
@@ -36,6 +37,21 @@ function parseKv(text: string): Record<string, string> {
 
 function kvText(obj: Record<string, string> | undefined): string {
   return Object.keys(obj || {}).map((k) => k + '=' + (obj || {})[k]).join('\n')
+}
+
+/** Status-bar color matrix: green / yellow / orange / red from author policy. */
+function skillDotClass(skill: SkillSummary): string {
+  if (skill.modelInvocable && skill.userInvocable) return css.dotOn
+  if (!skill.modelInvocable && skill.userInvocable) return css.dotYellow
+  if (skill.modelInvocable && !skill.userInvocable) return css.dotOrange
+  return css.dotOff
+}
+
+function skillDotTitle(skill: SkillSummary): string {
+  if (skill.modelInvocable && skill.userInvocable) return '可用'
+  if (!skill.modelInvocable && skill.userInvocable) return '模型不可用'
+  if (skill.modelInvocable && !skill.userInvocable) return '用户不可用'
+  return '模型不可用，用户不可用'
 }
 
 interface McpForm {
@@ -86,7 +102,7 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
   const [msg, setMsg] = useState('')
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [enabledFilter, setEnabledFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
+  const [policyFilter, setPolicyFilter] = useState<'all' | 'model-off' | 'user-off'>('all')
 
   const load = () => {
     setList({ loading: true, items: [], error: '' })
@@ -99,15 +115,6 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
 
   useEffect(() => { load() }, [props.cwd, props.refreshKey])
 
-  const toggle = (skill: SkillSummary) => {
-    setBusy(skill.path)
-    setMsg('')
-    api.toggleSkill(skill.path, !skill.enabled).then(() => {
-      setBusy('')
-      load()
-    }).catch((e) => { setBusy(''); setMsg(String((e as Error)?.message || e)) })
-  }
-
   const remove = (skill: SkillSummary) => {
     if (confirmDel !== skill.path) { setConfirmDel(skill.path); return }
     setConfirmDel(null)
@@ -115,7 +122,9 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
     setMsg('')
     api.deleteSkill(skill.path, skill.kind).then(() => {
       setBusy('')
+      if (detailName === skill.path) { setDetailName(null); setDetail(null) }
       load()
+      notifyCapabilityChange()
     }).catch((e) => { setBusy(''); setMsg(String((e as Error)?.message || e)) })
   }
 
@@ -172,6 +181,7 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
       }
       setScan((prev) => ({ ...prev, busy: false, selected: {}, note }))
       load()
+      notifyCapabilityChange()
     }).catch((e) => {
       setScan((prev) => ({ ...prev, busy: false, error: String((e as Error)?.message || e) }))
     })
@@ -180,8 +190,8 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
   const q = query.trim().toLowerCase()
   const filtered = list.items.filter((it) => {
     if (q !== '' && !it.name.toLowerCase().includes(q)) return false
-    if (enabledFilter === 'enabled' && !it.enabled) return false
-    if (enabledFilter === 'disabled' && it.enabled) return false
+    if (policyFilter === 'model-off' && it.modelInvocable) return false
+    if (policyFilter === 'user-off' && it.userInvocable) return false
     return true
   })
   const byLevel: Record<string, SkillSummary[]> = {}
@@ -194,42 +204,41 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
     rows.push(<div key={'g-' + level} className={css.groupH}>{label} ({gs.length})</div>)
     gs.forEach((skill) => {
       const isBusy = busy === skill.path
+      const open = detailName === skill.path
+      const entry = detail
+      const d = (open && entry && entry.path === skill.path) ? entry.data : null
       rows.push(
-        <div key={skill.path} className={css.row}>
-          <div className={css.main} style={{ cursor: 'pointer' }} onClick={() => { view(skill) }}>
-            <div className={css.nameLine}>
-              <span className={css.statusDot + ' ' + (skill.enabled ? css.dotOn : css.dotOff)} title={skill.enabled ? '已启用' : '已禁用'} />
-              <span className={css.name}>{skill.name}</span>
-              {skill.linked ? <span className={css.badge}>软链</span> : null}
+        <div key={skill.path} className={css.row + (open ? ' ' + css.rowOpen : '')}>
+          <div className={css.rowHead}>
+            <div className={css.main} style={{ cursor: 'pointer' }} onClick={() => { view(skill) }}>
+              <div className={css.nameLine}>
+                <span className={css.statusDot + ' ' + skillDotClass(skill)} title={skillDotTitle(skill)} />
+                <span className={css.name}>{skill.name}</span>
+                {skill.linked ? <span className={css.badge}>软链</span> : null}
+                {!skill.modelInvocable ? <span className={css.policyTag}>模型不可用</span> : null}
+                {!skill.userInvocable ? <span className={css.policyTag}>用户不可用</span> : null}
+              </div>
+              {skill.description ? <div className={css.desc}>{skill.description}</div> : null}
             </div>
-            {skill.description ? <div className={css.desc}>{skill.description}</div> : null}
+            <span className={css.badge}>{sourceLabel(skill.source)}</span>
+            <button type="button" className={css.btn} onClick={(e) => { e.stopPropagation(); view(skill) }}>{open ? '收起' : '详情'}</button>
+            <button type="button" className={css.btn + ' ' + css.btnDanger} disabled={isBusy} onClick={(e) => { e.stopPropagation(); remove(skill) }}>{confirmDel === skill.path ? '确认删除?' : '删除'}</button>
           </div>
-          <span className={css.badge}>{sourceLabel(skill.source)}</span>
-          <label className={css.switch}>
-            <input type="checkbox" checked={skill.enabled} disabled={isBusy} onChange={() => { toggle(skill) }} />
-            <span>{skill.enabled ? '启用' : '禁用'}</span>
-          </label>
-          <button type="button" className={css.btn} onClick={() => { view(skill) }}>{detailName === skill.path ? '收起' : '详情'}</button>
-          <button type="button" className={css.btn + ' ' + css.btnDanger} disabled={isBusy} onClick={() => { remove(skill) }}>{confirmDel === skill.path ? '确认删除?' : '删除'}</button>
+          {open
+            ? <div className={css.preview}>
+                {d === null
+                  ? <div>加载中…</div>
+                  : d && d.error
+                    ? <div>{d.error}</div>
+                    : <div>
+                        <div className={css.descWrap}>{d.description || skill.description}</div>
+                        {d.whenToUse ? <div className={css.descWrap}>When to use: {d.whenToUse}</div> : null}
+                        <pre className={css.pre}>{d.content || ''}</pre>
+                      </div>}
+              </div>
+            : null}
         </div>,
       )
-      if (detailName === skill.path) {
-        const entry = detail
-        const d = (entry && entry.path === skill.path) ? entry.data : null
-        rows.push(
-          <div key={skill.path + '-detail'} className={css.detail}>
-            {d === null
-              ? <div>加载中…</div>
-              : d && d.error
-                ? <div>{d.error}</div>
-                : <div>
-                    <div className={css.name}>{d.description || skill.description}</div>
-                    {d.whenToUse ? <div className={css.desc}>When to use: {d.whenToUse}</div> : null}
-                    <pre className={css.pre}>{d.content || ''}</pre>
-                  </div>}
-          </div>,
-        )
-      }
     })
   })
 
@@ -277,10 +286,10 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
         </div>
         <div className={css.inline}>
           <input className={css.inputGrow} placeholder="搜索技能名称…" value={query} onChange={(e) => { setQuery(e.target.value) }} />
-          <select className={css.filterSelect} value={enabledFilter} onChange={(e) => { setEnabledFilter(e.target.value as 'all' | 'enabled' | 'disabled') }}>
+          <select className={css.filterSelect} value={policyFilter} onChange={(e) => { setPolicyFilter(e.target.value as 'all' | 'model-off' | 'user-off') }}>
             <option value="all">全部</option>
-            <option value="enabled">已启用</option>
-            <option value="disabled">未启用</option>
+            <option value="model-off">模型不可用</option>
+            <option value="user-off">用户不可用</option>
           </select>
         </div>
         {msg ? <div className={css.error}>{msg}</div> : null}
@@ -330,6 +339,7 @@ function McpPanel(props: { refreshKey: number; onChanged: () => void }) {
     setMsg('')
     setBusy('retry:' + s.name)
     api.retryMcp(s.name).then(() => {
+      notifyCapabilityChange()
       refresh()
       setTimeout(refresh, 1500)
       setTimeout(refresh, 4000)
@@ -373,19 +383,20 @@ function McpPanel(props: { refreshKey: number; onChanged: () => void }) {
       setMsg('已保存 ' + server.name)
       setForm(EMPTY_FORM)
       load()
+      notifyCapabilityChange()
     }).catch((e) => { setBusy(''); setMsg(String((e as Error)?.message || e)) })
   }
 
   const toggle = (s: McpServerSummary) => {
     setMsg('')
-    api.setMcpEnabled(s.name, !s.enabled).then(() => { load() }).catch((e) => { setMsg(String((e as Error)?.message || e)) })
+    api.setMcpEnabled(s.name, !s.enabled).then(() => { load(); notifyCapabilityChange() }).catch((e) => { setMsg(String((e as Error)?.message || e)) })
   }
 
   const remove = (s: McpServerSummary) => {
     if (confirmDel !== s.name) { setConfirmDel(s.name); return }
     setConfirmDel(null)
     setMsg('')
-    api.deleteMcp(s.name).then(() => { load() }).catch((e) => { setMsg(String((e as Error)?.message || e)) })
+    api.deleteMcp(s.name).then(() => { load(); notifyCapabilityChange() }).catch((e) => { setMsg(String((e as Error)?.message || e)) })
   }
 
   const edit = (s: McpServerSummary) => {
