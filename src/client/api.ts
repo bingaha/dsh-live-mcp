@@ -63,10 +63,6 @@ export class SkillsMcpApi {
     return body.skill
   }
 
-  async toggleSkill(path: string, enabled: boolean): Promise<void> {
-    await post<{ ok: boolean }>(SKILLS_MCP_API.skillToggle, { path, enabled })
-  }
-
   async deleteSkill(path: string, kind: 'bundle' | 'file'): Promise<void> {
     await post<{ ok: boolean }>(SKILLS_MCP_API.skillDelete, { path, kind })
   }

@@ -78,27 +78,11 @@ describe('skill invocation policy', () => {
     expect(item).toMatchObject({ modelInvocable: false, userInvocable: false })
   })
 
-  it('ignores leftover plugin skill switches in state.json', () => {
-    const file = writeSkill(project, 'plain', '')
-    fs.mkdirSync(path.join(home, 'skills-mcp-manager'), { recursive: true })
-    fs.writeFileSync(path.join(home, 'skills-mcp-manager', 'state.json'), JSON.stringify({
-      skills: { [file]: false },
-    }, null, 2), 'utf8')
-    const item = skills.listSkills(project).find((s) => s.name === 'plain')
-    expect(item).toMatchObject({ modelInvocable: true, userInvocable: true, enabled: true })
-    expect(skills.readSkill(file)).toMatchObject({ modelInvocable: true, userInvocable: true, enabled: true })
-    expect(JSON.parse(fs.readFileSync(path.join(home, 'skills-mcp-manager', 'state.json'), 'utf8')).skills[file]).toBe(false)
-  })
-
   it('resolveConversation lists every skill with flags and does not filter by switches', () => {
     writeSkill(project, 'plain', '')
     writeSkill(project, 'user-only', 'disable-model-invocation: true')
     writeSkill(project, 'model-only', 'user-invocable: false')
-    const closed = writeSkill(project, 'closed', 'disable-model-invocation: true\nuser-invocable: false')
-    fs.mkdirSync(path.join(home, 'skills-mcp-manager'), { recursive: true })
-    fs.writeFileSync(path.join(home, 'skills-mcp-manager', 'state.json'), JSON.stringify({
-      skills: { [closed]: true },
-    }, null, 2), 'utf8')
+    writeSkill(project, 'closed', 'disable-model-invocation: true\nuser-invocable: false')
 
     const mcp = {
       summarize(servers: McpServerConfig[]): McpServerSummary[] {

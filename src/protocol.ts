@@ -102,7 +102,6 @@ export interface McpServerSummary extends McpServerConfig {
 export const SKILLS_MCP_API = {
   skills: '/api/dsh-skills-mcp/skills',
   skillRead: '/api/dsh-skills-mcp/skills/read',
-  skillToggle: '/api/dsh-skills-mcp/skills/toggle',
   skillDelete: '/api/dsh-skills-mcp/skills/delete',
   skillScan: '/api/dsh-skills-mcp/skills/scan',
   skillImport: '/api/dsh-skills-mcp/skills/import',

@@ -129,14 +129,6 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
         writeJson(res, 200, ok({ skill }))
       }),
 
-      handle('POST', SKILLS_MCP_API.skillToggle, async (_req, res, body, _url) => {
-        const path = typeof body?.path === 'string' ? body.path : ''
-        if (!path) { writeJson(res, 400, { ok: false, error: 'path required' }); return }
-        const enabled = body.enabled === true
-        skills.setSkillEnabled(path, enabled)
-        writeJson(res, 200, ok({ path, enabled }))
-      }),
-
       handle('POST', SKILLS_MCP_API.skillDelete, async (_req, res, body, _url) => {
         const path = typeof body?.path === 'string' ? body.path : ''
         if (!path) { writeJson(res, 400, { ok: false, error: 'path required' }); return }

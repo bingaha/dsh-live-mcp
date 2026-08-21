@@ -3,15 +3,13 @@
  * SKILL.md frontmatter (including read-only invocation policy), and performs
  * delete, scan-for-import, and import. Runs in the Host process with direct
  * node:fs access (a real npm package no longer needs the shell+node hack the
- * dynamic plugin used). The plugin does not rewrite SKILL.md and does not
- * overlay `state.json` skill switches onto list/detail results.
+ * dynamic plugin used). The plugin does not rewrite SKILL.md.
  * @module
  */
 
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { readState, writeState } from './state.ts'
 import type { ImportItem, ImportResult, ScannedSkill, SkillDetail, SkillLevel, SkillSource, SkillSummary } from './protocol.ts'
 
 /** User-level skill roots (project roots are derived from the workspace cwd). */
@@ -205,7 +203,7 @@ export class SkillsManager {
       if (a.level !== b.level) return a.level === 'project' ? -1 : 1
       return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
     })
-    // Author policy only — plugin state.json skill switches are ignored (not deleted).
+    // Author policy only — no plugin-side enable/disable overrides.
     return items
   }
 
@@ -216,17 +214,6 @@ export class SkillsManager {
     const parsed = parseSkillFile(raw)
     if (parsed === null) return null
     return { ...parsed, path }
-  }
-
-  /**
-   * Enable/disable a skill by recording it in the plugin-owned switch set.
-   * The SKILL.md file is never rewritten (the disable-model-invocation
-   * attribute is no longer modified).
-   */
-  setSkillEnabled(path: string, enabled: boolean): void {
-    const state = readState()
-    state.skills = { ...state.skills, [path]: enabled }
-    writeState(state)
   }
 
   /** Delete a skill (the whole bundle directory, or the flat .md file). */
