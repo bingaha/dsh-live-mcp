@@ -1,6 +1,6 @@
 # dsh-live-mcp
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI 的 MCP 实时管理插件：**对话中途启停 / 屏蔽 MCP 服务器，工具集即刻生效**，无需重开会话。附带技能的浏览、导入与删除。入口：设置页「技能与 MCP」+ 每个会话输入框上方的状态条。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI 的 MCP 实时管理插件：**对话中途启停 / 屏蔽 MCP 服务器，工具集即刻生效**，无需重开会话，即可提供会话级的MCP控制能力。
 
 MCP 为**真实连接**：启用的服务器真正连上，工具注册为 `mcp__<server>__<tool>`；改动下一轮模型请求即刻生效。
 
