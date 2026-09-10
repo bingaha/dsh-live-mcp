@@ -4,12 +4,19 @@
  */
 
 import { SKILLS_MCP_API } from '../protocol.ts'
-import type { ConversationMcpOption, ConversationSelection, ConversationSkillOption, ImportItem, ImportResult, McpServerConfig, McpServerSummary, ScannedSkill, SkillDetail, SkillSummary } from '../protocol.ts'
+import type { ConversationMcpOption, ConversationSelection, ConversationSkillOption, ImportItem, ImportResult, McpServerConfig, McpServerSummary, ScannedSkill, SkillDetail, SkillSummary, WorkspaceDefaultSelection } from '../protocol.ts'
 
 /** The conversation-capability view the host resolves for one session. */
 export interface ConversationView {
   selection: ConversationSelection
   available: { skills: ConversationSkillOption[]; mcp: ConversationMcpOption[] }
+  defaultsError?: string
+}
+
+/** Workspace defaults response; a read error remains non-blocking. */
+export interface WorkspaceDefaultsView {
+  selection: WorkspaceDefaultSelection
+  error?: string
 }
 
 /** Error carrying the route's JSON error message. */
@@ -103,18 +110,41 @@ export class SkillsMcpApi {
     return body.test
   }
 
-  async getConversation(session: string): Promise<ConversationView> {
-    const body = await get<{ ok: boolean; selection: ConversationSelection; available: { skills: ConversationSkillOption[]; mcp: ConversationMcpOption[] } }>(
-      SKILLS_MCP_API.conversation + '?session=' + encodeURIComponent(session),
+  async getWorkspaceDefaults(cwd: string): Promise<WorkspaceDefaultsView> {
+    const body = await get<{ ok: boolean; selection: WorkspaceDefaultSelection; error?: string }>(
+      SKILLS_MCP_API.workspaceDefaults + '?cwd=' + encodeURIComponent(cwd),
     )
-    return { selection: body.selection, available: body.available }
+    return { selection: body.selection, error: body.error }
   }
 
-  async setConversation(session: string, selection: ConversationSelection): Promise<ConversationView> {
-    const body = await post<{ ok: boolean; selection: ConversationSelection; available: { skills: ConversationSkillOption[]; mcp: ConversationMcpOption[] } }>(
-      SKILLS_MCP_API.conversation,
-      { session, ...selection },
+  async setWorkspaceDefaults(cwd: string, selection: WorkspaceDefaultSelection): Promise<WorkspaceDefaultsView> {
+    const body = await post<{ ok: boolean; selection: WorkspaceDefaultSelection; error?: string }>(
+      SKILLS_MCP_API.workspaceDefaults,
+      { cwd, ...selection },
     )
-    return { selection: body.selection, available: body.available }
+    return { selection: body.selection, error: body.error }
+  }
+
+  async getConversation(session: string, cwd: string): Promise<ConversationView> {
+    const body = await get<{ ok: boolean; selection: ConversationSelection; available: { skills: ConversationSkillOption[]; mcp: ConversationMcpOption[] }; defaultsError?: string }>(
+      SKILLS_MCP_API.conversation + '?session=' + encodeURIComponent(session) + '&cwd=' + encodeURIComponent(cwd),
+    )
+    return { selection: body.selection, available: body.available, defaultsError: body.defaultsError }
+  }
+
+  async initializeConversation(session: string, cwd: string): Promise<ConversationView> {
+    const body = await post<{ ok: boolean; selection: ConversationSelection; available: { skills: ConversationSkillOption[]; mcp: ConversationMcpOption[] }; defaultsError?: string }>(
+      SKILLS_MCP_API.conversationInitialize,
+      { session, cwd },
+    )
+    return { selection: body.selection, available: body.available, defaultsError: body.defaultsError }
+  }
+
+  async setConversation(session: string, cwd: string, selection: ConversationSelection): Promise<ConversationView> {
+    const body = await post<{ ok: boolean; selection: ConversationSelection; available: { skills: ConversationSkillOption[]; mcp: ConversationMcpOption[] }; defaultsError?: string }>(
+      SKILLS_MCP_API.conversation,
+      { session, cwd, ...selection },
+    )
+    return { selection: body.selection, available: body.available, defaultsError: body.defaultsError }
   }
 }

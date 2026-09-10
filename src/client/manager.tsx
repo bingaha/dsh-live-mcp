@@ -6,9 +6,10 @@
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
+import type { WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
 import { SkillsMcpApi } from './api.ts'
 import { notifyCapabilityChange } from './notify.ts'
-import type { McpServerConfig, McpServerSummary, ScannedSkill, SkillSummary } from '../protocol.ts'
+import type { McpServerConfig, McpServerSummary, ScannedSkill, SkillSummary, WorkspaceDefaultSelection } from '../protocol.ts'
 import css from './settings-card.module.css'
 
 /** Stateless fetch client (created once per module). */
@@ -71,9 +72,9 @@ const EMPTY_FORM: McpForm = {
   name: '', transport: 'stdio', command: '', args: '', env: '', cwd: '', url: '', headers: '', mode: 'form', json: '',
 }
 
-/** Top-level manager with the Skills / MCP tabs. */
-export function SkillsMcpManager(props: { cwd: string; enabled: boolean; pickDirectory: () => Promise<string | null> }) {
-  const [tab, setTab] = useState<'skills' | 'mcp'>('skills')
+/** Top-level manager with the Skills, MCP, and workspace configuration tabs. */
+export function SkillsMcpManager(props: { workspaces: WorkspaceListState; enabled: boolean; pickDirectory: () => Promise<string | null> }) {
+  const [tab, setTab] = useState<'skills' | 'mcp' | 'workspace'>('skills')
   const [refreshKey, setRefreshKey] = useState(0)
   const bump = () => { setRefreshKey((k) => k + 1) }
 
@@ -82,13 +83,16 @@ export function SkillsMcpManager(props: { cwd: string; enabled: boolean; pickDir
       <div className={css.tabs}>
         <button type="button" className={tab === 'skills' ? css.tabActive : css.tab} onClick={() => { setTab('skills') }}>Skills 技能</button>
         <button type="button" className={tab === 'mcp' ? css.tabActive : css.tab} onClick={() => { setTab('mcp') }}>MCP 服务</button>
+        <button type="button" className={tab === 'workspace' ? css.tabActive : css.tab} onClick={() => { setTab('workspace') }}>工作区配置</button>
       </div>
       {props.enabled
         ? null
         : <p className={css.disabledBanner} role="status">插件已禁用：路由与 MCP 连接均已停止，重新启用后刷新即可恢复。</p>}
       {tab === 'skills'
-        ? <SkillsPanel cwd={props.cwd} refreshKey={refreshKey} onChanged={bump} pickDirectory={props.pickDirectory} />
-        : <McpPanel refreshKey={refreshKey} onChanged={bump} />}
+        ? <SkillsPanel cwd="" refreshKey={refreshKey} onChanged={bump} pickDirectory={props.pickDirectory} />
+        : tab === 'mcp'
+          ? <McpPanel refreshKey={refreshKey} onChanged={bump} />
+          : <WorkspaceConfigPanel workspaces={props.workspaces} refreshKey={refreshKey} />}
     </div>
   )
 }
@@ -298,6 +302,107 @@ function SkillsPanel(props: { cwd: string; refreshKey: number; onChanged: () => 
           ? <div>加载中…</div>
           : (filtered.length === 0 ? <div>{list.items.length === 0 ? '没有发现技能' : '没有匹配的技能'}</div> : rows)}
       </div>
+    </div>
+  )
+}
+
+interface WorkspaceDefaultsState {
+  loading: boolean
+  selection: WorkspaceDefaultSelection
+  error: string
+  notice: string
+}
+
+const EMPTY_WORKSPACE_DEFAULTS: WorkspaceDefaultsState = { loading: false, selection: {}, error: '', notice: '' }
+
+export function WorkspaceDefaultsSection(props: { workspaces: WorkspaceListState; servers: McpServerSummary[]; loadingServers: boolean; refreshKey: number }) {
+  const [states, setStates] = useState<Record<string, WorkspaceDefaultsState>>({})
+  const [expandedCwd, setExpandedCwd] = useState<string | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
+
+  useEffect(() => {
+    const workspaces = props.workspaces.items
+    const visible = new Set(workspaces.map((workspace) => workspace.path))
+    setStates((previous) => Object.fromEntries(Object.entries(previous).filter(([cwd]) => visible.has(cwd))))
+    if (expandedCwd !== null && !visible.has(expandedCwd)) setExpandedCwd(null)
+    workspaces.forEach((workspace) => {
+      setStates((previous) => ({ ...previous, [workspace.path]: { ...EMPTY_WORKSPACE_DEFAULTS, loading: true } }))
+      api.getWorkspaceDefaults(workspace.path).then((result) => {
+        setStates((previous) => ({ ...previous, [workspace.path]: { loading: false, selection: result.selection, error: result.error || '', notice: '' } }))
+      }).catch((error) => {
+        setStates((previous) => ({ ...previous, [workspace.path]: { ...EMPTY_WORKSPACE_DEFAULTS, error: String((error as Error)?.message || error) } }))
+      })
+    })
+  }, [props.workspaces, props.refreshKey])
+
+  const toggleDefault = (cwd: string, server: McpServerSummary) => {
+    const state = states[cwd] || EMPTY_WORKSPACE_DEFAULTS
+    if (state.loading || saving !== null) return
+    const blocked = new Set(state.selection.mcp || [])
+    if (blocked.has(server.name)) blocked.delete(server.name)
+    else blocked.add(server.name)
+    const selection: WorkspaceDefaultSelection = { mcp: [...blocked] }
+    const savingKey = cwd + '\u0000' + server.name
+    setSaving(savingKey)
+    setStates((previous) => ({ ...previous, [cwd]: { ...state, selection, error: '', notice: '' } }))
+    api.setWorkspaceDefaults(cwd, selection).then((result) => {
+      setStates((previous) => ({ ...previous, [cwd]: { loading: false, selection: result.selection, error: result.error || '', notice: '已保存' } }))
+      setSaving(null)
+    }).catch((error) => {
+      setStates((previous) => ({ ...previous, [cwd]: { ...(previous[cwd] || state), error: String((error as Error)?.message || error) } }))
+      setSaving(null)
+    })
+  }
+
+  return (
+    <div className={css.section}>
+      <div className={css.h}>工作区的新对话默认</div>
+      <p className={css.note}>亮表示新对话默认可用，灰表示默认屏蔽；点击只保存该工作区默认值，不会改变服务器的全局启用或连接状态。</p>
+      {props.workspaces.items.length === 0 ? <p className={css.note} role="status">尚未配置工作区</p> : null}
+      {!props.loadingServers && props.servers.length === 0 ? <div className={css.note}>尚未配置任何 MCP 服务器</div> : null}
+      {props.workspaces.items.map((workspace) => {
+        const state = states[workspace.path] || EMPTY_WORKSPACE_DEFAULTS
+        const expanded = expandedCwd === workspace.path
+        const blocked = new Set(state.selection.mcp || [])
+        return <div key={workspace.workspaceId} className={css.workspaceDefaultRow}>
+          <button type="button" className={css.workspaceDefaultHeader} aria-expanded={expanded} onClick={() => { setExpandedCwd(expanded ? null : workspace.path) }}>
+            <span className={css.main}><span className={css.name}>{workspace.title}</span><span className={css.workspacePath}>{workspace.path}</span></span>
+            <span className={css.workspaceDefaultSummary}>{state.loading ? '加载中…' : (blocked.size === 0 ? '全部默认可用' : '默认屏蔽 ' + blocked.size + ' 个 MCP')}</span>
+          </button>
+          {expanded ? <div className={css.workspaceDefaultDetails}>
+            {state.error ? <div className={css.error} role="alert">默认设置错误：{state.error}</div> : null}
+            {state.notice ? <div className={css.note} role="status">{state.notice}</div> : null}
+            {props.servers.map((server) => {
+              const enabledByDefault = !blocked.has(server.name)
+              const savingThis = saving === workspace.path + '\u0000' + server.name
+              const statusClass = !enabledByDefault ? css.defaultMcpBlocked : server.status === 'failed' ? css.defaultMcpFailed : server.status === 'connecting' ? css.defaultMcpConnecting : css.defaultMcpAvailable
+              return <button key={server.name} type="button" className={css.defaultMcpChip + ' ' + statusClass} disabled={state.loading || saving !== null} onClick={() => { toggleDefault(workspace.path, server) }}>
+                <span className={css.defaultMcpIndicator} /><span>{server.name}</span><span className={css.defaultMcpLabel}>{savingThis ? '保存中…' : (enabledByDefault ? '默认可用' : '默认屏蔽')}</span>
+              </button>
+            })}
+          </div> : null}
+        </div>
+      })}
+    </div>
+  )
+}
+
+function WorkspaceConfigPanel(props: { workspaces: WorkspaceListState; refreshKey: number }) {
+  const [list, setList] = useState<{ loading: boolean; servers: McpServerSummary[]; error: string }>({ loading: true, servers: [], error: '' })
+
+  useEffect(() => {
+    setList({ loading: true, servers: [], error: '' })
+    api.listMcp().then((servers) => {
+      setList({ loading: false, servers, error: '' })
+    }).catch((error) => {
+      setList({ loading: false, servers: [], error: String((error as Error)?.message || error) })
+    })
+  }, [props.refreshKey])
+
+  return (
+    <div className={css.panel}>
+      {list.error ? <div className={css.error}>{list.error}</div> : null}
+      <WorkspaceDefaultsSection workspaces={props.workspaces} servers={list.servers} loadingServers={list.loading} refreshKey={props.refreshKey} />
     </div>
   )
 }

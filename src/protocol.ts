@@ -111,7 +111,9 @@ export const SKILLS_MCP_API = {
   mcpEnabled: '/api/dsh-skills-mcp/mcp/enabled',
   mcpDelete: '/api/dsh-skills-mcp/mcp/delete',
   mcpTest: '/api/dsh-skills-mcp/mcp/test',
+  workspaceDefaults: '/api/dsh-skills-mcp/workspace-defaults',
   conversation: '/api/dsh-skills-mcp/conversation',
+  conversationInitialize: '/api/dsh-skills-mcp/conversation/initialize',
 } as const
 
 /** One conversation's capability selection (stored in the session's own dir).
@@ -130,6 +132,11 @@ export interface ConversationSelection {
   /** Blacklisted skill names that may still exist on disk. This round's
    * skill list / conversation GET does not filter by plugin switches. */
   skills?: string[]
+}
+
+/** Workspace-wide default MCP blacklist, copied only into a blank session. */
+export interface WorkspaceDefaultSelection {
+  mcp?: string[]
 }
 
 /** One enabled MCP server as a selectable candidate in the status bar. */

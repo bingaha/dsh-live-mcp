@@ -154,6 +154,15 @@ export function readSelection(sessionId: string, cwd: string): ConversationSelec
   }
 }
 
+/** Whether this session has any persisted blacklist, including legacy files. */
+export function hasSelection(sessionId: string, cwd: string): boolean {
+  try {
+    return candidatePaths(sessionId, cwd).some((target) => existsSync(target))
+  } catch {
+    return false
+  }
+}
+
 /**
  * Persist one session's blacklist into the official session directory.
  * An empty blacklist deletes the file (no config = everything available).

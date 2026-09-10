@@ -7,6 +7,7 @@
  */
 
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
 import { SkillsMcpManager } from './manager.tsx'
 import css from './settings-card.module.css'
 
@@ -24,18 +25,14 @@ export type SkillsMcpSectionProps =
 export function SkillsMcpSection(props: SkillsMcpSectionProps) {
   const { t } = props
 
-  // Current workspace path → project-level skills root.
-  const cwd = props.useWorkspaces((s) => {
-    const items = (s && s.items) || []
-    const ws = items.find((w) => w.workspaceId === s.recentWorkspaceId) || items[0]
-    return ws ? ws.path : ''
-  })
+  // Preserve the runtime's registry order; settings defaults apply per workspace.
+  const workspaces = props.useWorkspaces((snapshot: WorkspaceListState) => snapshot)
 
   return (
     <div className={css.sectionPage}>
       <h2 className={css.pageHeading}>{t('title')}</h2>
       <p className={css.pageIntro}>{t('description')}</p>
-      <SkillsMcpManager cwd={cwd} enabled={true} pickDirectory={props.pickDirectory} />
+      <SkillsMcpManager workspaces={workspaces} enabled={true} pickDirectory={props.pickDirectory} />
     </div>
   )
 }

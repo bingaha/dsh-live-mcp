@@ -144,6 +144,49 @@
   flex-direction: column;
   align-items: stretch;
 }
+.workspaceDefaultRow {
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.workspaceDefaultHeader {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workspaceDefaultHeader:hover { background: rgba(128, 128, 128, 0.08); }
+.workspacePath { display: block; margin-top: 2px; color: rgba(128, 128, 128, 1); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspaceDefaultSummary { flex: none; color: rgba(128, 128, 128, 1); font-size: 12px; white-space: nowrap; }
+.workspaceDefaultDetails { display: flex; flex-wrap: wrap; gap: 7px; padding: 9px 10px; border-top: 1px solid rgba(128, 128, 128, 0.2); }
+.defaultMcpChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 4px 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.defaultMcpChip:disabled { opacity: 0.55; cursor: default; }
+.defaultMcpIndicator { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.defaultMcpLabel { opacity: 0.8; }
+.defaultMcpAvailable { color: #2fb45a; }
+.defaultMcpBlocked { color: rgba(128, 128, 128, 1); }
+.defaultMcpFailed { color: #e5534b; }
+.defaultMcpConnecting { color: #d29922; }
 .rowHead {
   display: flex;
   align-items: center;

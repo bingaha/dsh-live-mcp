@@ -8,12 +8,14 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { isAbsolute } from 'node:path'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { McpManager, normalizeMcpServer, readMcpConfig, validateMcpServer, writeMcpConfig } from './mcp.ts'
 import { SkillsManager } from './skills.ts'
-import { readSelection, writeSelection } from './session-select.ts'
+import { hasSelection, readSelection, writeSelection } from './session-select.ts'
+import { readWorkspaceDefaults, writeWorkspaceDefaults } from './workspace-defaults.ts'
 import { SKILLS_MCP_API } from './protocol.ts'
-import type { ConversationMcpOption, ConversationSelection, ConversationSkillOption, McpServerConfig } from './protocol.ts'
+import type { ConversationMcpOption, ConversationSelection, ConversationSkillOption, McpServerConfig, WorkspaceDefaultSelection } from './protocol.ts'
 
 /** Cap on JSON request bodies (server definitions and import lists are small). */
 const MAX_JSON_BODY_BYTES = 1024 * 1024
@@ -73,6 +75,35 @@ export interface RoutesDeps {
   applyLive: (sessionId: string, selection: ConversationSelection) => void
 }
 
+type ConversationView = ReturnType<typeof resolveConversation> & { defaultsError?: string }
+
+let sessionOperations = new Map<string, Promise<void>>()
+
+function enqueueSession(sessionId: string, task: () => void): Promise<void> {
+  const prior = sessionOperations.get(sessionId) ?? Promise.resolve()
+  const next = prior.then(task, task)
+  const settled = next.finally(() => {
+    if (sessionOperations.get(sessionId) === settled) sessionOperations.delete(sessionId)
+  })
+  sessionOperations.set(sessionId, settled)
+  return settled
+}
+
+function requireAbsoluteCwd(cwd: string): string | undefined {
+  return cwd.length > 0 && isAbsolute(cwd) ? cwd : undefined
+}
+
+function selectionFromBody(body: Record<string, unknown>): ConversationSelection {
+  return {
+    skills: Array.isArray(body.skills) ? body.skills.filter((x): x is string => typeof x === 'string') : undefined,
+    mcp: Array.isArray(body.mcp) ? body.mcp.filter((x): x is string => typeof x === 'string') : undefined,
+  }
+}
+
+function workspaceSelectionFromBody(body: Record<string, unknown>): WorkspaceDefaultSelection {
+  return { mcp: Array.isArray(body.mcp) ? body.mcp.filter((x): x is string => typeof x === 'string') : undefined }
+}
+
 /**
  * Build every /api/dsh-skills-mcp route (exact paths).
  * @param deps - skills engine and MCP connection manager.
@@ -113,6 +144,13 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
   })
 
   const ok = (data: Record<string, unknown> = {}): Record<string, unknown> => ({ ok: true, ...data })
+  const resolveSessionCwd = (session: string, fallback: string): string | undefined =>
+    requireAbsoluteCwd(resolveCwd(session) ?? fallback)
+  const conversationView = (session: string, cwd: string): ConversationView => {
+    const defaults = readWorkspaceDefaults(cwd)
+    const view = resolveConversation(skills, mcp, readSelection(session, cwd), cwd)
+    return defaults.error === undefined ? view : { ...view, defaultsError: defaults.error }
+  }
 
   return {
     routes: [
@@ -216,6 +254,30 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
         writeJson(res, 200, ok({ test: result }))
       }),
 
+      // ── workspace defaults ────────────────────────────────────────────────
+      // Exact web routes are keyed by path, so GET and POST share one handler.
+      {
+        kind: 'exact',
+        path: SKILLS_MCP_API.workspaceDefaults,
+        handler: async (req, res) => {
+          if (!isLoopbackRequest(req)) { writeJson(res, 403, { ok: false, error: 'forbidden: loopback-only' }); return }
+          if (req.method === 'GET') {
+            const cwd = requireAbsoluteCwd(queryParam(new URL(req.url ?? '/', 'http://localhost'), 'cwd') ?? '')
+            if (cwd === undefined) { writeJson(res, 400, { ok: false, error: 'absolute cwd required' }); return }
+            const result = readWorkspaceDefaults(cwd)
+            writeJson(res, 200, ok({ selection: result.selection, ...(result.error === undefined ? {} : { error: result.error }) }))
+            return
+          }
+          if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method not allowed' }); return }
+          const body = await readJsonBody(req)
+          if (body === undefined) { writeJson(res, 400, { ok: false, error: 'invalid or oversized JSON body' }); return }
+          const cwd = requireAbsoluteCwd(typeof body.cwd === 'string' ? body.cwd : '')
+          if (cwd === undefined) { writeJson(res, 400, { ok: false, error: 'absolute cwd required' }); return }
+          const result = await writeWorkspaceDefaults(cwd, workspaceSelectionFromBody(body))
+          writeJson(res, 200, ok({ selection: result.selection, ...(result.error === undefined ? {} : { error: result.error }) }))
+        },
+      },
+
       // ── per-conversation ─────────────────────────────────────────────────
       // GET = resolve this session's selection + available set; POST = save a
       // selection. One WebRoute (exact paths are keyed by path alone, with no
@@ -230,8 +292,9 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
               const url = new URL(req.url ?? '/', 'http://localhost')
               const session = queryParam(url, 'session') ?? ''
               if (!session) { writeJson(res, 400, { ok: false, error: 'session required' }); return }
-              const cwd = resolveCwd(session) ?? queryParam(url, 'cwd') ?? ''
-              writeJson(res, 200, ok(resolveConversation(skills, mcp, readSelection(session, cwd), cwd)))
+              const cwd = resolveSessionCwd(session, queryParam(url, 'cwd') ?? '')
+              if (cwd === undefined) { writeJson(res, 400, { ok: false, error: 'absolute cwd required' }); return }
+              writeJson(res, 200, ok(conversationView(session, cwd)))
               return
             }
             if (req.method !== 'POST') { writeJson(res, 405, { ok: false, error: 'method not allowed' }); return }
@@ -239,21 +302,47 @@ export function makeRoutes(deps: RoutesDeps): { routes: WebRoute[] } {
             if (body === undefined) { writeJson(res, 400, { ok: false, error: 'invalid or oversized JSON body' }); return }
             const session = typeof body?.session === 'string' ? body.session : ''
             if (!session) { writeJson(res, 400, { ok: false, error: 'session required' }); return }
-            const cwd = resolveCwd(session) ?? (typeof body?.cwd === 'string' ? body.cwd : '')
-            const request: ConversationSelection = {
-              skills: Array.isArray(body?.skills) ? (body.skills as string[]).filter((x) => typeof x === 'string') : undefined,
-              mcp: Array.isArray(body?.mcp) ? (body.mcp as string[]).filter((x) => typeof x === 'string') : undefined,
-            }
-            writeSelection(session, cwd, request)
-            // If the conversation is live, apply immediately so a status-bar
-            // toggle takes effect right away (between model requests).
-            applyLive(session, request)
-            writeJson(res, 200, ok(resolveConversation(skills, mcp, request, cwd)))
+            const cwd = resolveSessionCwd(session, typeof body.cwd === 'string' ? body.cwd : '')
+            if (cwd === undefined) { writeJson(res, 400, { ok: false, error: 'absolute cwd required' }); return }
+            const request = selectionFromBody(body)
+            // Initialization and status-bar writes share this queue. A user
+            // selection queued after initialization always wins its final state.
+            await enqueueSession(session, () => {
+              writeSelection(session, cwd, request)
+              // Apply within the same sequence as persistence so concurrent
+              // initialization or toggles cannot leave the live agent stale.
+              applyLive(session, request)
+            })
+            writeJson(res, 200, ok(conversationView(session, cwd)))
           } catch (e) {
             writeJson(res, 500, { ok: false, error: String((e as Error)?.message ?? e) })
           }
         },
       },
+
+      // A blank browser session explicitly opts into this operation. Ordinary
+      // conversation reads never alter persisted historical sessions.
+      handle('POST', SKILLS_MCP_API.conversationInitialize, async (_req, res, body, _url) => {
+        const session = typeof body.session === 'string' ? body.session : ''
+        if (!session) { writeJson(res, 400, { ok: false, error: 'session required' }); return }
+        const cwd = resolveSessionCwd(session, typeof body.cwd === 'string' ? body.cwd : '')
+        if (cwd === undefined) { writeJson(res, 400, { ok: false, error: 'absolute cwd required' }); return }
+        let initialized: ConversationSelection | undefined
+        let defaultsError: string | undefined
+        await enqueueSession(session, () => {
+          if (hasSelection(session, cwd)) return
+          const defaults = readWorkspaceDefaults(cwd)
+          defaultsError = defaults.error
+          if ((defaults.selection.mcp ?? []).length === 0) return
+          initialized = { mcp: defaults.selection.mcp }
+          writeSelection(session, cwd, initialized)
+          // Keep the live update in the same queue as user writes so a later
+          // status-bar choice is necessarily the final agent state.
+          applyLive(session, initialized)
+        })
+        const view = conversationView(session, cwd)
+        writeJson(res, 200, ok(defaultsError === undefined ? view : { ...view, defaultsError }))
+      }),
     ],
   }
 }
