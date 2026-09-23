@@ -7,9 +7,11 @@
  * @module
  */
 
-import type { Context } from '@deepseek-ai/cordis'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
-import z from 'schemastery'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+// Type-only: declares the Loader's `loader/volatile-update` merge event, the
+// live-config update path this plugin subscribes to.
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -22,29 +24,24 @@ import { ConversationIsolation } from './isolation.ts'
 /** Stable cordis plugin name. */
 export const name = 'skills-mcp-manager'
 
-/** Services required before the surfaces can mount. `settings` is
- * deliberately absent: installSettingsSection registers it on an inner scoped
- * fiber, so a deployment without the settings surface still gets routes + MCP. */
+/** Services required before the surfaces can mount. Configuration now rides the
+ * Cordis Config seam (a profile-backed settings form), so the `settings`
+ * service is no longer injected here. */
 export const inject = ['webServer', 'tools', 'systemPrompt', 'agents']
 
-/**
- * Settings namespace this plugin's config lives under. Spelled here rather
- * than imported: the browser half spells the same value and must not depend
- * on a Host package.
- */
-export const SKILLS_MCP_NAMESPACE = settingsNamespace('skills-mcp-manager')
-
-/** Plugin config, validated by the same-named schemastery schema. */
+/** Plugin config, validated by the same-named schemastery schema. Both fields
+ * are `.volatile()`: the profile-backed settings form edits them live without
+ * remounting this plugin, and the Loader merges each new value into `config`. */
 export interface Config {
   /** Master switch (routes, MCP connections, prompt section). */
-  enabled?: boolean
+  enabled: Volatile<boolean>
   /** Announce the plugin to every agent's system prompt. */
-  announceToAgent?: boolean
+  announceToAgent: Volatile<boolean>
 }
 
-export const Config: z<Config> = z.object({
-  enabled: z.boolean().default(true),
-  announceToAgent: z.boolean().default(true),
+export const Config = z.object({
+  enabled: z.boolean().default(true).volatile(),
+  announceToAgent: z.boolean().default(true).volatile(),
 })
 
 const DEFAULT_ENABLED = true
@@ -62,10 +59,11 @@ export const SKILLS_MCP_GUIDANCE = '本机已安装 dsh-live-mcp 插件（技能
  * @param config - resolved plugin config (schema defaults applied by the loader).
  */
 export function apply(ctx: Context, config?: Config): void {
-  let current: () => Config = () => config ?? {}
-  const resolve = (): Config => ({
-    enabled: current().enabled ?? DEFAULT_ENABLED,
-    announceToAgent: current().announceToAgent ?? DEFAULT_ANNOUNCE,
+  // `config` fields are Volatile references: sample them at call time so a live
+  // settings edit is picked up by the next `sync()`.
+  const resolve = (): { enabled: boolean; announceToAgent: boolean } => ({
+    enabled: config?.enabled?.get() ?? DEFAULT_ENABLED,
+    announceToAgent: config?.announceToAgent?.get() ?? DEFAULT_ANNOUNCE,
   })
 
   const skills = new SkillsManager()
@@ -133,13 +131,11 @@ export function apply(ctx: Context, config?: Config): void {
     scheduleMcpReload()
   }
 
-  installSettingsSection(ctx, SKILLS_MCP_NAMESPACE, Config, config ?? {}, {
-    setSource: (source) => {
-      current = source
-      sync()
-    },
-    onChange: sync,
-  })
+  // Live config edits from the profile-backed settings form arrive as a Loader
+  // volatile merge (no remount); re-derive every surface to match the new
+  // values. `ctx.on` is fiber-scoped, so the subscription unwinds with the
+  // plugin.
+  ctx.on('loader/volatile-update', () => { sync() })
 
   // Teardown must be returned so Cordis waits for MCP transports to release
   // their tool namespaces before an injected replacement starts.
